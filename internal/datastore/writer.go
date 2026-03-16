@@ -58,7 +58,10 @@ func (b *Builder) Add(fingerprintID uint32, durationMs uint32, values []uint32) 
 	if len(values) > 0xFFFF {
 		return fmt.Errorf("ckaf: fingerprint %d has %d sub-fingerprints, exceeds u16 max (65535)", fingerprintID, len(values))
 	}
-	compressed := wire.CompressFingerprint(values)
+	compressed, err := b.compress(values)
+	if err != nil {
+		return err
+	}
 	if len(compressed) > 0xFFFF {
 		return fmt.Errorf("ckaf: fingerprint %d compressed to %d bytes, exceeds u16 max (65535)", fingerprintID, len(compressed))
 	}
@@ -69,6 +72,15 @@ func (b *Builder) Add(fingerprintID uint32, durationMs uint32, values []uint32) 
 		rawCount:      uint16(len(values)),
 	})
 	return nil
+}
+
+func (b *Builder) compress(values []uint32) ([]byte, error) {
+	switch b.compression {
+	case cktype.CompressPFOR:
+		return wire.CompressFingerprintPFOR(values)
+	default:
+		return wire.CompressFingerprint(values), nil
+	}
 }
 
 // Finish sorts records, writes all sections, and closes the file.

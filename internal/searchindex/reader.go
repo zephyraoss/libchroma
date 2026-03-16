@@ -27,6 +27,7 @@ type SearchIndex struct {
 	Footer               cktype.Footer
 	Tuning               cktype.TuningConfig
 	FileSize             int64
+	Compression          cktype.CompressionMethod
 	HasOvfl              bool
 	OverflowBucketStart  int64
 	OverflowPostingStart int64
@@ -65,6 +66,10 @@ func Open(path string) (*SearchIndex, error) {
 		return nil, err
 	}
 
+	compression := cktype.CompressVarint
+	if header.Flags&1 != 0 {
+		compression = cktype.CompressPFOR
+	}
 	hasOverflow := header.Flags&2 != 0
 
 	tuning, err := readTuningConfig(mm)
@@ -99,13 +104,14 @@ func Open(path string) (*SearchIndex, error) {
 	}
 
 	idx := &SearchIndex{
-		F:        f,
-		Mmap:     mm,
-		Header:   header,
-		Footer:   footer,
-		Tuning:   tuning,
-		FileSize: fileSize,
-		HasOvfl:  hasOverflow,
+		F:           f,
+		Mmap:        mm,
+		Header:      header,
+		Footer:      footer,
+		Tuning:      tuning,
+		FileSize:    fileSize,
+		Compression: compression,
+		HasOvfl:     hasOverflow,
 	}
 
 	if hasOverflow && footer.OverflowOffset != 0 {
@@ -241,6 +247,13 @@ func (idx *SearchIndex) readPostingListFrom(dirStart, postingStart int64, bucket
 		return nil, fmt.Errorf("%w: posting count %d exceeds available data", cktype.ErrOffsetOutOfBounds, postingCount)
 	}
 
+	if idx.Compression == cktype.CompressPFOR {
+		return idx.readPostingListPFOR(absOffset, int(postingCount))
+	}
+	return idx.readPostingListVarint(absOffset, postingCount)
+}
+
+func (idx *SearchIndex) readPostingListVarint(absOffset int64, postingCount uint32) ([]cktype.PostingEntry, error) {
 	maxSize := int64(6) + int64(postingCount-1)*7
 	remaining := int64(idx.Mmap.Len()) - absOffset
 	if maxSize > remaining {
@@ -286,4 +299,22 @@ func (idx *SearchIndex) readPostingListFrom(dirStart, postingStart int64, bucket
 	}
 
 	return entries, nil
+}
+
+func (idx *SearchIndex) readPostingListPFOR(absOffset int64, count int) ([]cktype.PostingEntry, error) {
+	// Upper bound: 4 (first ID) + ceil(count/128) blocks * (2 + 16*32 + 128*5) + count*2 positions
+	// Simplified: use remaining file data as upper bound.
+	remaining := int64(idx.Mmap.Len()) - absOffset
+	if remaining <= 0 {
+		return nil, fmt.Errorf("%w: posting list offset", cktype.ErrOffsetOutOfBounds)
+	}
+
+	data := make([]byte, remaining)
+	n, err := idx.Mmap.ReadAt(data, absOffset)
+	if err != nil && n < 4 {
+		return nil, fmt.Errorf("reading PFOR posting list: %w", err)
+	}
+	data = data[:n]
+
+	return wire.DecompressPostingsPFOR(data, count)
 }

@@ -65,9 +65,7 @@ func Open(path string) (*DataStore, error) {
 
 	compression := cktype.CompressVarint
 	if header.Flags&1 != 0 {
-		mmap.Unmap(m)
-		f.Close()
-		return nil, fmt.Errorf("ckaf: PFOR compression (flag bit 0) is not yet supported")
+		compression = cktype.CompressPFOR
 	}
 	hasOverflow := header.Flags&2 != 0
 
@@ -203,7 +201,7 @@ func (ds *DataStore) ReadFingerprint(rec *cktype.Record) (*cktype.Fingerprint, e
 		return nil, fmt.Errorf("reading fingerprint data: %w", err)
 	}
 
-	values, err := wire.DecompressFingerprint(data, int(rec.RawCount))
+	values, err := ds.decompress(data, int(rec.RawCount))
 	if err != nil {
 		return nil, err
 	}
@@ -223,7 +221,7 @@ func (ds *DataStore) ReadFingerprintFromOverflow(rec *cktype.Record) (*cktype.Fi
 		return nil, fmt.Errorf("reading overflow fingerprint data: %w", err)
 	}
 
-	values, err := wire.DecompressFingerprint(data, int(rec.RawCount))
+	values, err := ds.decompress(data, int(rec.RawCount))
 	if err != nil {
 		return nil, err
 	}
@@ -233,6 +231,15 @@ func (ds *DataStore) ReadFingerprintFromOverflow(rec *cktype.Record) (*cktype.Fi
 		DurationMs: rec.DurationMs,
 		Values:     values,
 	}, nil
+}
+
+func (ds *DataStore) decompress(data []byte, rawCount int) ([]uint32, error) {
+	switch ds.Compression {
+	case cktype.CompressPFOR:
+		return wire.DecompressFingerprintPFOR(data, rawCount)
+	default:
+		return wire.DecompressFingerprint(data, rawCount)
+	}
 }
 
 // RecordCount returns the number of records in the main table.

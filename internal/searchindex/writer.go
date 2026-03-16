@@ -146,20 +146,24 @@ func (b *Builder) BuildFrom(ds *datastore.DataStore) error {
 		}
 
 		var encoded []byte
-		var tmp [4]byte
-		binary.LittleEndian.PutUint32(tmp[:], bucket[0].FingerprintID)
-		encoded = append(encoded, tmp[:]...)
-		var ptmp [2]byte
-		binary.LittleEndian.PutUint16(ptmp[:], bucket[0].Position)
-		encoded = append(encoded, ptmp[:]...)
-
-		prevID := bucket[0].FingerprintID
-		for _, entry := range bucket[1:] {
-			delta := entry.FingerprintID - prevID
-			encoded = wire.AppendVarint(encoded, delta)
-			binary.LittleEndian.PutUint16(ptmp[:], entry.Position)
+		if b.compression == cktype.CompressPFOR {
+			encoded = wire.CompressPostingsPFOR(bucket)
+		} else {
+			var tmp [4]byte
+			binary.LittleEndian.PutUint32(tmp[:], bucket[0].FingerprintID)
+			encoded = append(encoded, tmp[:]...)
+			var ptmp [2]byte
+			binary.LittleEndian.PutUint16(ptmp[:], bucket[0].Position)
 			encoded = append(encoded, ptmp[:]...)
-			prevID = entry.FingerprintID
+
+			prevID := bucket[0].FingerprintID
+			for _, entry := range bucket[1:] {
+				delta := entry.FingerprintID - prevID
+				encoded = wire.AppendVarint(encoded, delta)
+				binary.LittleEndian.PutUint16(ptmp[:], entry.Position)
+				encoded = append(encoded, ptmp[:]...)
+				prevID = entry.FingerprintID
+			}
 		}
 
 		allPostings = append(allPostings, encoded...)
