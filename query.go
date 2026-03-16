@@ -3,12 +3,16 @@ package chroma
 import (
 	"math/bits"
 	"sort"
+
+	"github.com/zephyraoss/libchroma/internal/datastore"
+	"github.com/zephyraoss/libchroma/internal/metadata"
+	"github.com/zephyraoss/libchroma/internal/searchindex"
 )
 
 type candidate struct {
 	count    int
-	bestPos  int // candidate position from first posting hit
-	queryPos int // corresponding query sub-fingerprint index
+	bestPos  int
+	queryPos int
 }
 
 func defaultQueryOptions() QueryOptions {
@@ -21,8 +25,11 @@ func defaultQueryOptions() QueryOptions {
 }
 
 // QueryDataset performs a full similarity lookup across the dataset.
-// ds and si are required. mm may be nil if no metadata is needed.
 func QueryDataset(ds *DataStore, si *SearchIndex, mm *MetadataMap, fingerprint []uint32, durationMs uint32, opts *QueryOptions) ([]MatchResult, error) {
+	return queryDataset(ds, si, mm, fingerprint, durationMs, opts)
+}
+
+func queryDataset(ds *datastore.DataStore, si *searchindex.SearchIndex, mm *metadata.MetadataMap, fingerprint []uint32, durationMs uint32, opts *QueryOptions) ([]MatchResult, error) {
 	if len(fingerprint) == 0 {
 		return nil, nil
 	}
@@ -41,16 +48,13 @@ func QueryDataset(ds *DataStore, si *SearchIndex, mm *MetadataMap, fingerprint [
 		o.IncludeMetadata = opts.IncludeMetadata
 	}
 
-	// Step 1-2: Band extraction, bucket lookup, candidate counting.
-	// si.Search already handles band extraction and posting list reads.
-	// We need per-sub-fingerprint position tracking, so we do it manually.
 	candidates := make(map[uint32]*candidate)
-	numBands := si.tuning.NumBands
+	numBands := si.Tuning.NumBands
 
 	for queryPos, subFP := range fingerprint {
 		bands := si.ExtractBands(subFP)
 		for k := uint8(0); k < numBands; k++ {
-			bucketIdx := uint32(k)*si.tuning.BucketsPerBand + bands[k]
+			bucketIdx := uint32(k)*si.Tuning.BucketsPerBand + bands[k]
 
 			entries, err := si.ReadPostingList(bucketIdx)
 			if err != nil {
@@ -70,9 +74,8 @@ func QueryDataset(ds *DataStore, si *SearchIndex, mm *MetadataMap, fingerprint [
 				}
 			}
 
-			// Overflow posting list.
-			if si.hasOverflow {
-				oEntries, err := si.readOverflowPostingList(bucketIdx)
+			if si.HasOvfl {
+				oEntries, err := si.ReadOverflowPostingList(bucketIdx)
 				if err != nil {
 					return nil, err
 				}
@@ -92,7 +95,6 @@ func QueryDataset(ds *DataStore, si *SearchIndex, mm *MetadataMap, fingerprint [
 		}
 	}
 
-	// Step 3: Threshold filtering.
 	minMatches := 3
 	adaptive := int(float64(len(fingerprint)*int(numBands)) * 0.02)
 	if adaptive > minMatches {
@@ -103,8 +105,8 @@ func QueryDataset(ds *DataStore, si *SearchIndex, mm *MetadataMap, fingerprint [
 	}
 
 	type candidateEntry struct {
-		id  uint32
-		c   *candidate
+		id uint32
+		c  *candidate
 	}
 	var filtered []candidateEntry
 	for id, c := range candidates {
@@ -113,7 +115,6 @@ func QueryDataset(ds *DataStore, si *SearchIndex, mm *MetadataMap, fingerprint [
 		}
 	}
 
-	// Sort by count descending and keep top MaxCandidates.
 	sort.Slice(filtered, func(i, j int) bool {
 		return filtered[i].c.count > filtered[j].c.count
 	})
@@ -121,12 +122,11 @@ func QueryDataset(ds *DataStore, si *SearchIndex, mm *MetadataMap, fingerprint [
 		filtered = filtered[:o.MaxCandidates]
 	}
 
-	// Step 4-5: Detailed comparison and scoring.
 	var matches []Match
 	for _, ce := range filtered {
 		rec, err := ds.Lookup(ce.id)
 		if err != nil {
-			continue // record not found, skip
+			continue
 		}
 		fp, err := ds.ReadFingerprint(rec)
 		if err != nil {
@@ -156,12 +156,10 @@ func QueryDataset(ds *DataStore, si *SearchIndex, mm *MetadataMap, fingerprint [
 		})
 	}
 
-	// Sort by BER ascending.
 	sort.Slice(matches, func(i, j int) bool {
 		return matches[i].BitErrorRate < matches[j].BitErrorRate
 	})
 
-	// Step 6: Metadata resolution.
 	results := make([]MatchResult, len(matches))
 	for i, m := range matches {
 		results[i] = MatchResult{Match: m}
@@ -182,8 +180,6 @@ func QueryDataset(ds *DataStore, si *SearchIndex, mm *MetadataMap, fingerprint [
 	return results, nil
 }
 
-// hammingDistance computes the bit-level hamming distance between two
-// sub-fingerprint arrays aligned at the given offset.
 func hammingDistance(a, b []uint32, offset int) (int, int) {
 	var dist, totalBits int
 	startA, startB := 0, 0

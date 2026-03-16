@@ -18,7 +18,6 @@ func TestDatasetOpenClose(t *testing.T) {
 	const numFPs = 8
 	const fpCount = 50
 
-	// Build datastore.
 	db, err := NewDataStoreBuilder(dsPath, CompressVarint)
 	if err != nil {
 		t.Fatalf("NewDataStoreBuilder: %v", err)
@@ -42,7 +41,6 @@ func TestDatasetOpenClose(t *testing.T) {
 		t.Fatalf("Finish datastore: %v", err)
 	}
 
-	// Build search index.
 	ds, err := OpenDataStore(dsPath)
 	if err != nil {
 		t.Fatalf("OpenDataStore: %v", err)
@@ -71,7 +69,6 @@ func TestDatasetOpenClose(t *testing.T) {
 	}
 	ds.Close()
 
-	// Build metadata.
 	mb, err := NewMetadataMapBuilder(metaPath, true)
 	if err != nil {
 		t.Fatalf("NewMetadataMapBuilder: %v", err)
@@ -92,14 +89,12 @@ func TestDatasetOpenClose(t *testing.T) {
 		t.Fatalf("Finish metadata: %v", err)
 	}
 
-	// Open dataset.
 	dataset, err := Open(prefix)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer dataset.Close()
 
-	// Stats.
 	stats := dataset.Stats()
 	if stats.RecordCount != numFPs {
 		t.Errorf("RecordCount: got %d, want %d", stats.RecordCount, numFPs)
@@ -117,7 +112,6 @@ func TestDatasetOpenClose(t *testing.T) {
 		t.Errorf("TuningConfig.NumBands: got %d, want 4", stats.TuningConfig.NumBands)
 	}
 
-	// Query with a known fingerprint.
 	results, err := dataset.Query(fps[0].values, fps[0].dur, nil)
 	if err != nil {
 		t.Fatalf("Query: %v", err)
@@ -139,7 +133,6 @@ func TestDatasetOpenClose(t *testing.T) {
 		t.Errorf("query did not find fingerprint ID %d", fps[0].id)
 	}
 
-	// Lookup by ID.
 	fp, err := dataset.Lookup(fps[2].id)
 	if err != nil {
 		t.Fatalf("Lookup: %v", err)
@@ -151,7 +144,6 @@ func TestDatasetOpenClose(t *testing.T) {
 		t.Fatalf("Lookup values length: got %d, want %d", len(fp.Values), len(fps[2].values))
 	}
 
-	// LookupMetadata.
 	meta, mbid, err := dataset.LookupMetadata(fps[0].id)
 	if err != nil {
 		t.Fatalf("LookupMetadata: %v", err)
@@ -169,7 +161,6 @@ func TestDatasetOpenClose(t *testing.T) {
 		t.Errorf("Year: got %q, want %q", meta.Year, "2024")
 	}
 
-	// NeedsCompaction should be false.
 	if dataset.NeedsCompaction(5.0) {
 		t.Error("NeedsCompaction should be false for fresh dataset")
 	}

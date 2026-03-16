@@ -1,9 +1,8 @@
-package chroma
+package wire
 
 import "errors"
 
 // CompressFingerprintPFOR compresses using XOR-delta + PFOR bitpacking.
-// This is an optimization for later implementation.
 func CompressFingerprintPFOR(values []uint32) ([]byte, error) {
 	return nil, errors.New("ckaf: PFOR compression not yet implemented")
 }

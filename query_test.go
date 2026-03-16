@@ -15,7 +15,6 @@ func buildTestDataset(t *testing.T, dir string, numFPs, fpCount int) (dsPath, id
 	metaPath = filepath.Join(dir, "test.ckm")
 	datasetID := uuid.New()
 
-	// Build datastore.
 	db, err := NewDataStoreBuilder(dsPath, CompressVarint)
 	if err != nil {
 		t.Fatalf("NewDataStoreBuilder: %v", err)
@@ -36,7 +35,6 @@ func buildTestDataset(t *testing.T, dir string, numFPs, fpCount int) (dsPath, id
 		t.Fatalf("Finish datastore: %v", err)
 	}
 
-	// Build search index.
 	ds, err := OpenDataStore(dsPath)
 	if err != nil {
 		t.Fatalf("OpenDataStore: %v", err)
@@ -65,7 +63,6 @@ func buildTestDataset(t *testing.T, dir string, numFPs, fpCount int) (dsPath, id
 	}
 	ds.Close()
 
-	// Build metadata.
 	mb, err := NewMetadataMapBuilder(metaPath, true)
 	if err != nil {
 		t.Fatalf("NewMetadataMapBuilder: %v", err)
@@ -109,7 +106,6 @@ func TestQueryExactMatch(t *testing.T) {
 	}
 	defer mm.Close()
 
-	// Query with exact copy of first fingerprint.
 	results, err := QueryDataset(ds, si, mm, allValues[0], uint32(len(allValues[0]))*100, nil)
 	if err != nil {
 		t.Fatalf("QueryDataset: %v", err)
@@ -119,7 +115,6 @@ func TestQueryExactMatch(t *testing.T) {
 		t.Fatal("QueryDataset returned no results")
 	}
 
-	// The exact match should be the top result.
 	found := false
 	for _, r := range results {
 		if r.Match.FingerprintID == allIDs[0] {
@@ -154,11 +149,10 @@ func TestQuerySimilarMatch(t *testing.T) {
 	}
 	defer si.Close()
 
-	// Create a slightly modified fingerprint (flip some bits).
 	query := make([]uint32, len(allValues[0]))
 	copy(query, allValues[0])
 	for i := 0; i < len(query); i += 5 {
-		query[i] ^= 0x01 // flip 1 bit every 5th value
+		query[i] ^= 0x01
 	}
 
 	opts := &QueryOptions{

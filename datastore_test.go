@@ -16,7 +16,6 @@ func TestDataStoreRoundTrip(t *testing.T) {
 	const numRecords = 100
 	const fpCount = 50
 
-	// Build datastore.
 	b, err := NewDataStoreBuilder(path, CompressVarint)
 	if err != nil {
 		t.Fatalf("NewDataStoreBuilder: %v", err)
@@ -41,7 +40,6 @@ func TestDataStoreRoundTrip(t *testing.T) {
 		t.Fatalf("Finish: %v", err)
 	}
 
-	// Read datastore.
 	ds, err := OpenDataStore(path)
 	if err != nil {
 		t.Fatalf("OpenDataStore: %v", err)
@@ -52,11 +50,10 @@ func TestDataStoreRoundTrip(t *testing.T) {
 		t.Errorf("RecordCount: got %d, want %d", ds.RecordCount(), numRecords)
 	}
 
-	if ds.Header().DatasetID != datasetID {
+	if ds.Header.DatasetID != datasetID {
 		t.Errorf("DatasetID mismatch")
 	}
 
-	// Verify each record.
 	for _, tr := range records {
 		rec, err := ds.Lookup(tr.id)
 		if err != nil {
@@ -124,7 +121,6 @@ func TestDataStoreBinarySearch(t *testing.T) {
 		t.Fatalf("NewDataStoreBuilder: %v", err)
 	}
 
-	// Add non-sequential IDs (builder sorts them).
 	ids := []uint32{500, 10, 999, 42, 7, 300, 1}
 	for _, id := range ids {
 		if err := b.Add(id, 1000, []uint32{id, id + 1, id + 2}); err != nil {

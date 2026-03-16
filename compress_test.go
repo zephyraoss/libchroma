@@ -2,21 +2,23 @@ package chroma
 
 import (
 	"testing"
+
+	"github.com/zephyraoss/libchroma/internal/wire"
 )
 
 func TestVarintRoundTrip(t *testing.T) {
 	values := []uint32{0, 1, 127, 128, 255, 256, 16383, 16384, 0x0FFFFFFF, 0xFFFFFFFF}
 	for _, v := range values {
-		buf := appendVarint(nil, v)
-		decoded, n, err := decodeVarint(buf, 0)
+		buf := wire.AppendVarint(nil, v)
+		decoded, n, err := wire.DecodeVarint(buf, 0)
 		if err != nil {
-			t.Fatalf("decodeVarint(%d): %v", v, err)
+			t.Fatalf("DecodeVarint(%d): %v", v, err)
 		}
 		if n != len(buf) {
-			t.Errorf("decodeVarint(%d): consumed %d bytes, encoded %d", v, n, len(buf))
+			t.Errorf("DecodeVarint(%d): consumed %d bytes, encoded %d", v, n, len(buf))
 		}
 		if decoded != v {
-			t.Errorf("decodeVarint(%d): got %d", v, decoded)
+			t.Errorf("DecodeVarint(%d): got %d", v, decoded)
 		}
 	}
 }
@@ -24,9 +26,9 @@ func TestVarintRoundTrip(t *testing.T) {
 func TestVarintLen(t *testing.T) {
 	values := []uint32{0, 1, 127, 128, 255, 16383, 16384, 0xFFFFFFFF}
 	for _, v := range values {
-		buf := appendVarint(nil, v)
-		if varintLen(v) != len(buf) {
-			t.Errorf("varintLen(%d) = %d, want %d", v, varintLen(v), len(buf))
+		buf := wire.AppendVarint(nil, v)
+		if wire.VarintLen(v) != len(buf) {
+			t.Errorf("VarintLen(%d) = %d, want %d", v, wire.VarintLen(v), len(buf))
 		}
 	}
 }
@@ -93,19 +95,8 @@ func TestCompressFingerprintIdentical(t *testing.T) {
 			break
 		}
 	}
-	// All-identical values should compress well (XOR deltas are 0, varint 0 = 1 byte each).
-	expectedMax := 4 + len(values) - 1 // 4 bytes for first value + 1 byte per zero delta
+	expectedMax := 4 + len(values) - 1
 	if len(compressed) > expectedMax {
 		t.Errorf("compressed size %d > expected max %d for identical values", len(compressed), expectedMax)
 	}
-}
-
-func generateTestFingerprint(id uint32, count int) (uint32, uint32, []uint32) {
-	values := make([]uint32, count)
-	rng := id
-	for i := range values {
-		rng = rng*1103515245 + 12345
-		values[i] = rng
-	}
-	return id, uint32(count) * 100, values
 }

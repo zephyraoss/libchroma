@@ -47,7 +47,7 @@ func TestMetadataRoundTrip(t *testing.T) {
 	}
 	defer mm.Close()
 
-	if mm.Header().DatasetID != datasetID {
+	if mm.Header.DatasetID != datasetID {
 		t.Errorf("DatasetID mismatch")
 	}
 	if !mm.HasTextMetadata() {

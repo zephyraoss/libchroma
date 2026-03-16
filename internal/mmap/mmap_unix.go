@@ -1,6 +1,6 @@
 //go:build !windows
 
-package chroma
+package mmap
 
 import (
 	"fmt"
@@ -8,27 +8,27 @@ import (
 	"syscall"
 )
 
-// mmapFile memory-maps the entire file read-only.
-func mmapFile(f *os.File) (*mmapData, error) {
+// MapFile memory-maps the entire file read-only.
+func MapFile(f *os.File) (*Data, error) {
 	fi, err := f.Stat()
 	if err != nil {
 		return nil, fmt.Errorf("stat for mmap: %w", err)
 	}
 	size := fi.Size()
 	if size == 0 {
-		return &mmapData{data: nil}, nil
+		return &Data{Bytes: nil}, nil
 	}
 	data, err := syscall.Mmap(int(f.Fd()), 0, int(size), syscall.PROT_READ, syscall.MAP_SHARED)
 	if err != nil {
 		return nil, fmt.Errorf("mmap: %w", err)
 	}
-	return &mmapData{data: data}, nil
+	return &Data{Bytes: data}, nil
 }
 
-// munmapData unmaps the memory region.
-func munmapData(m *mmapData) error {
-	if m.data == nil {
+// Unmap unmaps the memory region.
+func Unmap(m *Data) error {
+	if m.Bytes == nil {
 		return nil
 	}
-	return syscall.Munmap(m.data)
+	return syscall.Munmap(m.Bytes)
 }

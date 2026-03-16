@@ -1,4 +1,4 @@
-package chroma
+package metadata
 
 import (
 	"encoding/binary"
@@ -9,34 +9,33 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/zephyraoss/libchroma/internal/cktype"
+	"github.com/zephyraoss/libchroma/internal/wire"
 )
 
-const mappingRecordSize = 32
-
-// MetadataMapBuilder constructs a .ckm file.
-type MetadataMapBuilder struct {
+// Builder constructs a .ckm file.
+type Builder struct {
 	f           *os.File
 	path        string
 	includeText bool
 	datasetID   uuid.UUID
-	records     []metadataBuildRecord
+	records     []buildRecord
 }
 
-type metadataBuildRecord struct {
+type buildRecord struct {
 	fingerprintID uint32
 	mbid          uuid.UUID
 	trackID       uint32
-	metadata      *TrackMetadata
+	metadata      *cktype.TrackMetadata
 }
 
-// NewMetadataMapBuilder creates a new builder that writes a .ckm file at path.
-// If includeText is true, text metadata will be written to the string pool.
-func NewMetadataMapBuilder(path string, includeText bool) (*MetadataMapBuilder, error) {
+// NewBuilder creates a new builder that writes a .ckm file at path.
+func NewBuilder(path string, includeText bool) (*Builder, error) {
 	f, err := os.CreateTemp(filepath.Dir(path), "ckm-build-*.tmp")
 	if err != nil {
 		return nil, fmt.Errorf("creating temp file: %w", err)
 	}
-	return &MetadataMapBuilder{
+	return &Builder{
 		f:           f,
 		path:        path,
 		includeText: includeText,
@@ -44,13 +43,13 @@ func NewMetadataMapBuilder(path string, includeText bool) (*MetadataMapBuilder, 
 }
 
 // SetDatasetID sets the dataset UUID written to the file header.
-func (b *MetadataMapBuilder) SetDatasetID(id uuid.UUID) {
+func (b *Builder) SetDatasetID(id uuid.UUID) {
 	b.datasetID = id
 }
 
-// Add accumulates a mapping record. meta may be nil if no text metadata is available.
-func (b *MetadataMapBuilder) Add(fingerprintID uint32, mbid uuid.UUID, trackID uint32, meta *TrackMetadata) error {
-	b.records = append(b.records, metadataBuildRecord{
+// Add accumulates a mapping record.
+func (b *Builder) Add(fingerprintID uint32, mbid uuid.UUID, trackID uint32, meta *cktype.TrackMetadata) error {
+	b.records = append(b.records, buildRecord{
 		fingerprintID: fingerprintID,
 		mbid:          mbid,
 		trackID:       trackID,
@@ -61,13 +60,12 @@ func (b *MetadataMapBuilder) Add(fingerprintID uint32, mbid uuid.UUID, trackID u
 
 // Finish sorts records, builds the mapping table and string pool, writes
 // header and footer, and atomically renames the temp file to the final path.
-func (b *MetadataMapBuilder) Finish() error {
+func (b *Builder) Finish() error {
 
 	sort.Slice(b.records, func(i, j int) bool {
 		return b.records[i].fingerprintID < b.records[j].fingerprintID
 	})
 
-	// Build string pool
 	var stringPool []byte
 	type stringRef struct {
 		offset uint32
@@ -79,7 +77,7 @@ func (b *MetadataMapBuilder) Finish() error {
 			refs[i] = stringRef{offset: 0xFFFFFFFF, length: 0}
 			continue
 		}
-		entry := encodeStringPoolEntry(rec.metadata)
+		entry := EncodeStringPoolEntry(rec.metadata)
 		refs[i] = stringRef{
 			offset: uint32(len(stringPool)),
 			length: uint32(len(entry)),
@@ -87,27 +85,23 @@ func (b *MetadataMapBuilder) Finish() error {
 		stringPool = append(stringPool, entry...)
 	}
 
-	// Compute layout
-	section0Offset := uint64(HeaderSize)
-	section0Length := uint64(len(b.records)) * mappingRecordSize
-	// Align section 1 to 8-byte boundary
+	section0Offset := uint64(wire.HeaderSize)
+	section0Length := uint64(len(b.records)) * MappingRecordSize
 	section1Offset := section0Offset + section0Length
 	if section1Offset%8 != 0 {
 		section1Offset += 8 - (section1Offset % 8)
 	}
 	section1Length := uint64(len(stringPool))
 
-	// Flags
 	var flags uint32
 	if b.includeText {
-		flags |= 0x1 // bit 0: has_text_metadata
+		flags |= 0x1
 	}
 
-	// Write header
-	h := FileHeader{
-		Magic:          MagicCKM,
-		VersionMajor:   CurrentVersionMajor,
-		VersionMinor:   CurrentVersionMinor,
+	h := cktype.FileHeader{
+		Magic:          wire.MagicCKM,
+		VersionMajor:   wire.CurrentVersionMajor,
+		VersionMinor:   wire.CurrentVersionMinor,
 		Flags:          flags,
 		RecordCount:    uint64(len(b.records)),
 		CreatedAt:      uint64(time.Now().Unix()),
@@ -117,13 +111,12 @@ func (b *MetadataMapBuilder) Finish() error {
 		Section1Offset: section1Offset,
 		Section1Length: section1Length,
 	}
-	if err := WriteHeader(b.f, h); err != nil {
+	if err := wire.WriteHeader(b.f, h); err != nil {
 		return fmt.Errorf("writing header: %w", err)
 	}
 
-	// Write mapping table
 	tableOffset := int64(section0Offset)
-	var rec [mappingRecordSize]byte
+	var rec [MappingRecordSize]byte
 	for i, r := range b.records {
 		binary.LittleEndian.PutUint32(rec[0x00:], r.fingerprintID)
 		copy(rec[0x04:0x14], r.mbid[:])
@@ -133,10 +126,9 @@ func (b *MetadataMapBuilder) Finish() error {
 		if _, err := b.f.WriteAt(rec[:], tableOffset); err != nil {
 			return fmt.Errorf("writing mapping record %d: %w", i, err)
 		}
-		tableOffset += mappingRecordSize
+		tableOffset += MappingRecordSize
 	}
 
-	// Write alignment padding if needed
 	if pad := int64(section1Offset) - tableOffset; pad > 0 {
 		zeros := make([]byte, pad)
 		if _, err := b.f.WriteAt(zeros, tableOffset); err != nil {
@@ -144,24 +136,21 @@ func (b *MetadataMapBuilder) Finish() error {
 		}
 	}
 
-	// Write string pool
 	if len(stringPool) > 0 {
 		if _, err := b.f.WriteAt(stringPool, int64(section1Offset)); err != nil {
 			return fmt.Errorf("writing string pool: %w", err)
 		}
 	}
 
-	// Write footer
 	footerOffset := int64(section1Offset) + int64(section1Length)
-	footer := Footer{
+	footer := cktype.Footer{
 		OverflowOffset: 0,
-		Magic:          FooterMagicCKM,
+		Magic:          wire.FooterMagicCKM,
 	}
-	if err := WriteFooter(b.f, footerOffset, footer); err != nil {
+	if err := wire.WriteFooter(b.f, footerOffset, footer); err != nil {
 		return fmt.Errorf("writing footer: %w", err)
 	}
 
-	// Close temp file before rename
 	tmpPath := b.f.Name()
 	if err := b.f.Close(); err != nil {
 		return fmt.Errorf("closing temp file: %w", err)
@@ -172,30 +161,4 @@ func (b *MetadataMapBuilder) Finish() error {
 	}
 
 	return nil
-}
-
-// encodeStringPoolEntry encodes track metadata as a key=value string pool entry.
-func encodeStringPoolEntry(m *TrackMetadata) []byte {
-	var buf []byte
-	if m.Title != "" {
-		buf = append(buf, "t="...)
-		buf = append(buf, m.Title...)
-		buf = append(buf, '\n')
-	}
-	if m.Artist != "" {
-		buf = append(buf, "a="...)
-		buf = append(buf, m.Artist...)
-		buf = append(buf, '\n')
-	}
-	if m.Release != "" {
-		buf = append(buf, "r="...)
-		buf = append(buf, m.Release...)
-		buf = append(buf, '\n')
-	}
-	if m.Year != "" {
-		buf = append(buf, "y="...)
-		buf = append(buf, m.Year...)
-		buf = append(buf, '\n')
-	}
-	return buf
 }

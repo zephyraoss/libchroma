@@ -1,6 +1,6 @@
 //go:build windows
 
-package chroma
+package mmap
 
 import (
 	"fmt"
@@ -10,14 +10,14 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-func mmapFile(f *os.File) (*mmapData, error) {
+func MapFile(f *os.File) (*Data, error) {
 	fi, err := f.Stat()
 	if err != nil {
 		return nil, fmt.Errorf("stat for mmap: %w", err)
 	}
 	size := fi.Size()
 	if size == 0 {
-		return &mmapData{data: nil}, nil
+		return &Data{Bytes: nil}, nil
 	}
 
 	h, err := windows.CreateFileMapping(windows.Handle(f.Fd()), nil, windows.PAGE_READONLY, uint32(size>>32), uint32(size), nil)
@@ -32,12 +32,12 @@ func mmapFile(f *os.File) (*mmapData, error) {
 	}
 
 	data := unsafe.Slice((*byte)(unsafe.Pointer(addr)), size)
-	return &mmapData{data: data}, nil
+	return &Data{Bytes: data}, nil
 }
 
-func munmapData(m *mmapData) error {
-	if m.data == nil {
+func Unmap(m *Data) error {
+	if m.Bytes == nil {
 		return nil
 	}
-	return windows.UnmapViewOfFile(uintptr(unsafe.Pointer(&m.data[0])))
+	return windows.UnmapViewOfFile(uintptr(unsafe.Pointer(&m.Bytes[0])))
 }

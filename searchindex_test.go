@@ -44,7 +44,7 @@ func TestSearchIndexRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSearchIndexBuilder: %v", err)
 	}
-	sb.SetDatasetID(ds.Header().DatasetID)
+	sb.SetDatasetID(ds.Header.DatasetID)
 	sb.SetTuningConfig(TuningConfig{
 		NumBands:       4,
 		BitsPerBand:    8,
@@ -66,7 +66,7 @@ func TestSearchIndexRoundTrip(t *testing.T) {
 	}
 	defer si.Close()
 
-	tuning := si.Tuning()
+	tuning := si.Tuning
 	if tuning.NumBands != 4 {
 		t.Errorf("NumBands: got %d, want 4", tuning.NumBands)
 	}
@@ -80,13 +80,12 @@ func TestSearchIndexRoundTrip(t *testing.T) {
 		t.Errorf("TotalBuckets: got %d, want 1024", tuning.TotalBuckets)
 	}
 
-	// Search with the first fingerprint; its ID should appear in results.
 	results, err := si.Search(allValues[0])
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
 
-	fpID := uint32(1) // first fingerprint has ID 1
+	fpID := uint32(1)
 	found := false
 	for _, entry := range results {
 		if entry.FingerprintID == fpID {
@@ -128,11 +127,6 @@ func TestExtractBands(t *testing.T) {
 	}
 	defer si.Close()
 
-	// Known value: 0xAABBCCDD
-	// Band 0 (bits 0-7):  0xDD = 221
-	// Band 1 (bits 8-15): 0xCC = 204
-	// Band 2 (bits 16-23): 0xBB = 187
-	// Band 3 (bits 24-31): 0xAA = 170
 	bands := si.ExtractBands(0xAABBCCDD)
 	expected := []uint32{0xDD, 0xCC, 0xBB, 0xAA}
 	if len(bands) != len(expected) {

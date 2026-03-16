@@ -7,8 +7,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// buildOverflowTestDataset creates a .ckd, .ckx, and .ckm with the given fingerprints.
-// Returns the prefix path and the dataset ID used.
 func buildOverflowTestDataset(t *testing.T, dir string, fps []struct {
 	id     uint32
 	dur    uint32
@@ -23,7 +21,6 @@ func buildOverflowTestDataset(t *testing.T, dir string, fps []struct {
 
 	datasetID := uuid.New()
 
-	// Build datastore.
 	db, err := NewDataStoreBuilder(dsPath, CompressVarint)
 	if err != nil {
 		t.Fatalf("NewDataStoreBuilder: %v", err)
@@ -38,7 +35,6 @@ func buildOverflowTestDataset(t *testing.T, dir string, fps []struct {
 		t.Fatalf("Finish datastore: %v", err)
 	}
 
-	// Build search index.
 	ds, err := OpenDataStore(dsPath)
 	if err != nil {
 		t.Fatalf("OpenDataStore: %v", err)
@@ -66,7 +62,6 @@ func buildOverflowTestDataset(t *testing.T, dir string, fps []struct {
 	}
 	ds.Close()
 
-	// Build metadata.
 	mb, err := NewMetadataMapBuilder(metaPath, true)
 	if err != nil {
 		t.Fatalf("NewMetadataMapBuilder: %v", err)
@@ -88,7 +83,6 @@ func TestOverflowDataStoreRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	const fpCount = 30
 
-	// Build initial dataset with 5 fingerprints.
 	initialFPs := make([]struct {
 		id     uint32
 		dur    uint32
@@ -106,7 +100,6 @@ func TestOverflowDataStoreRoundTrip(t *testing.T) {
 	prefix, _ := buildOverflowTestDataset(t, dir, initialFPs)
 	dsPath := prefix + ".ckd"
 
-	// Append overflow records.
 	overflowRecs := make([]OverflowRecord, 3)
 	overflowExpected := make([]struct {
 		id     uint32
@@ -129,21 +122,19 @@ func TestOverflowDataStoreRoundTrip(t *testing.T) {
 		t.Fatalf("AppendDataStoreOverflow: %v", err)
 	}
 
-	// Re-open and verify.
 	ds, err := OpenDataStore(dsPath)
 	if err != nil {
 		t.Fatalf("OpenDataStore after overflow: %v", err)
 	}
 	defer ds.Close()
 
-	if !ds.HasOverflow() {
+	if !ds.HasOvfl {
 		t.Fatal("expected HasOverflow to be true")
 	}
-	if ds.OverflowCount() != 3 {
-		t.Errorf("OverflowCount: got %d, want 3", ds.OverflowCount())
+	if ds.OverflowCount != 3 {
+		t.Errorf("OverflowCount: got %d, want 3", ds.OverflowCount)
 	}
 
-	// Verify overflow records can be looked up and read.
 	for _, exp := range overflowExpected {
 		rec, err := ds.Lookup(exp.id)
 		if err != nil {
@@ -171,7 +162,6 @@ func TestOverflowDataStoreRoundTrip(t *testing.T) {
 		}
 	}
 
-	// Verify main records still accessible.
 	for _, fp := range initialFPs {
 		rec, err := ds.Lookup(fp.id)
 		if err != nil {
@@ -191,7 +181,6 @@ func TestOverflowSearchIndexRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	const fpCount = 30
 
-	// Build initial dataset.
 	initialFPs := make([]struct {
 		id     uint32
 		dur    uint32
@@ -210,7 +199,6 @@ func TestOverflowSearchIndexRoundTrip(t *testing.T) {
 	dsPath := prefix + ".ckd"
 	idxPath := prefix + ".ckx"
 
-	// Append overflow datastore records first.
 	overflowRecs := make([]OverflowRecord, 3)
 	for i := range overflowRecs {
 		id, dur, vals := generateTestFingerprint(uint32(i+100)*10, fpCount)
@@ -224,14 +212,12 @@ func TestOverflowSearchIndexRoundTrip(t *testing.T) {
 		t.Fatalf("AppendDataStoreOverflow: %v", err)
 	}
 
-	// Open datastore with overflow.
 	ds, err := OpenDataStore(dsPath)
 	if err != nil {
 		t.Fatalf("OpenDataStore: %v", err)
 	}
 	defer ds.Close()
 
-	// Append search index overflow for the new fingerprints.
 	newIDs := make([]uint32, len(overflowRecs))
 	for i, r := range overflowRecs {
 		newIDs[i] = r.FingerprintID
@@ -240,18 +226,16 @@ func TestOverflowSearchIndexRoundTrip(t *testing.T) {
 		t.Fatalf("AppendSearchIndexOverflow: %v", err)
 	}
 
-	// Open search index and verify overflow postings.
 	si, err := OpenSearchIndex(idxPath)
 	if err != nil {
 		t.Fatalf("OpenSearchIndex: %v", err)
 	}
 	defer si.Close()
 
-	if !si.HasOverflow() {
+	if !si.HasOvfl {
 		t.Fatal("expected search index HasOverflow to be true")
 	}
 
-	// Search for an overflow fingerprint - should find it in overflow posting lists.
 	entries, err := si.Search(overflowRecs[0].Values)
 	if err != nil {
 		t.Fatalf("Search: %v", err)
@@ -273,7 +257,6 @@ func TestOverflowMetadataRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	const fpCount = 30
 
-	// Build initial dataset.
 	initialFPs := make([]struct {
 		id     uint32
 		dur    uint32
@@ -294,7 +277,6 @@ func TestOverflowMetadataRoundTrip(t *testing.T) {
 	prefix, _ := buildOverflowTestDataset(t, dir, initialFPs)
 	metaPath := prefix + ".ckm"
 
-	// Append overflow metadata records.
 	overflowMeta := []OverflowMappingRecord{
 		{
 			FingerprintID: 5000,
@@ -320,15 +302,12 @@ func TestOverflowMetadataRoundTrip(t *testing.T) {
 		t.Fatalf("AppendMetadataOverflow: %v", err)
 	}
 
-	// Re-open and verify overflow metadata via compaction path
-	// (since MetadataMap.Lookup doesn't search overflow directly).
 	mm, err := OpenMetadataMap(metaPath)
 	if err != nil {
 		t.Fatalf("OpenMetadataMap after overflow: %v", err)
 	}
 	defer mm.Close()
 
-	// Main records should still be accessible.
 	for _, fp := range initialFPs {
 		rec, err := mm.Lookup(fp.id)
 		if err != nil {
@@ -348,7 +327,6 @@ func TestOverflowCompactionRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	const fpCount = 30
 
-	// Build initial dataset.
 	initialFPs := make([]struct {
 		id     uint32
 		dur    uint32
@@ -366,7 +344,6 @@ func TestOverflowCompactionRoundTrip(t *testing.T) {
 	prefix, _ := buildOverflowTestDataset(t, dir, initialFPs)
 	dsPath := prefix + ".ckd"
 
-	// Add overflow records.
 	overflowRecs := make([]OverflowRecord, 3)
 	for i := range overflowRecs {
 		id, dur, vals := generateTestFingerprint(uint32(i+100)*10, fpCount)
@@ -380,19 +357,17 @@ func TestOverflowCompactionRoundTrip(t *testing.T) {
 		t.Fatalf("AppendDataStoreOverflow: %v", err)
 	}
 
-	// Compact.
 	if err := CompactDataset(prefix); err != nil {
 		t.Fatalf("CompactDataset: %v", err)
 	}
 
-	// Open compacted dataset.
 	ds, err := OpenDataStore(dsPath)
 	if err != nil {
 		t.Fatalf("OpenDataStore after compact: %v", err)
 	}
 	defer ds.Close()
 
-	if ds.HasOverflow() {
+	if ds.HasOvfl {
 		t.Error("expected no overflow after compaction")
 	}
 
@@ -401,7 +376,6 @@ func TestOverflowCompactionRoundTrip(t *testing.T) {
 		t.Errorf("RecordCount: got %d, want %d", ds.RecordCount(), expectedTotal)
 	}
 
-	// Verify all records are accessible.
 	for _, fp := range initialFPs {
 		rec, err := ds.Lookup(fp.id)
 		if err != nil {
