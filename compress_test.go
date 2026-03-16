@@ -100,3 +100,125 @@ func TestCompressFingerprintIdentical(t *testing.T) {
 		t.Errorf("compressed size %d > expected max %d for identical values", len(compressed), expectedMax)
 	}
 }
+
+func TestPFORFingerprintRoundTrip(t *testing.T) {
+	for _, count := range []int{1, 10, 50, 127, 128, 129, 256, 500} {
+		_, _, values := generateTestFingerprint(42, count)
+		compressed, err := CompressFingerprintPFOR(values)
+		if err != nil {
+			t.Fatalf("CompressFingerprintPFOR (count=%d): %v", count, err)
+		}
+		decompressed, err := DecompressFingerprintPFOR(compressed, len(values))
+		if err != nil {
+			t.Fatalf("DecompressFingerprintPFOR (count=%d): %v", count, err)
+		}
+		if len(decompressed) != len(values) {
+			t.Fatalf("length mismatch (count=%d): got %d, want %d", count, len(decompressed), len(values))
+		}
+		for i, v := range values {
+			if decompressed[i] != v {
+				t.Errorf("mismatch at index %d (count=%d): got %08x, want %08x", i, count, decompressed[i], v)
+				break
+			}
+		}
+	}
+}
+
+func TestPFORFingerprintEmpty(t *testing.T) {
+	compressed, err := CompressFingerprintPFOR(nil)
+	if err != nil {
+		t.Fatalf("CompressFingerprintPFOR(nil): %v", err)
+	}
+	if compressed != nil {
+		t.Errorf("expected nil for empty input, got %v", compressed)
+	}
+	decompressed, err := DecompressFingerprintPFOR(nil, 0)
+	if err != nil {
+		t.Fatalf("DecompressFingerprintPFOR(nil, 0): %v", err)
+	}
+	if decompressed != nil {
+		t.Errorf("expected nil, got %v", decompressed)
+	}
+}
+
+func TestPFORFingerprintSingle(t *testing.T) {
+	values := []uint32{0xDEADBEEF}
+	compressed, err := CompressFingerprintPFOR(values)
+	if err != nil {
+		t.Fatalf("CompressFingerprintPFOR: %v", err)
+	}
+	decompressed, err := DecompressFingerprintPFOR(compressed, 1)
+	if err != nil {
+		t.Fatalf("DecompressFingerprintPFOR: %v", err)
+	}
+	if len(decompressed) != 1 || decompressed[0] != values[0] {
+		t.Errorf("got %v, want %v", decompressed, values)
+	}
+}
+
+func TestPFORFingerprintIdentical(t *testing.T) {
+	values := make([]uint32, 200)
+	for i := range values {
+		values[i] = 0x12345678
+	}
+	compressed, err := CompressFingerprintPFOR(values)
+	if err != nil {
+		t.Fatalf("CompressFingerprintPFOR: %v", err)
+	}
+	decompressed, err := DecompressFingerprintPFOR(compressed, len(values))
+	if err != nil {
+		t.Fatalf("DecompressFingerprintPFOR: %v", err)
+	}
+	for i, v := range values {
+		if decompressed[i] != v {
+			t.Errorf("mismatch at %d: got %d, want %d", i, decompressed[i], v)
+			break
+		}
+	}
+}
+
+func TestPFORPostingsRoundTrip(t *testing.T) {
+	entries := []PostingEntry{
+		{FingerprintID: 10, Position: 0},
+		{FingerprintID: 10, Position: 5},
+		{FingerprintID: 20, Position: 3},
+		{FingerprintID: 50, Position: 1},
+		{FingerprintID: 100, Position: 7},
+	}
+	encoded := wire.CompressPostingsPFOR(entries)
+	decoded, err := wire.DecompressPostingsPFOR(encoded, len(entries))
+	if err != nil {
+		t.Fatalf("DecompressPostingsPFOR: %v", err)
+	}
+	if len(decoded) != len(entries) {
+		t.Fatalf("length mismatch: got %d, want %d", len(decoded), len(entries))
+	}
+	for i, e := range entries {
+		if decoded[i].FingerprintID != e.FingerprintID || decoded[i].Position != e.Position {
+			t.Errorf("entry %d: got {%d, %d}, want {%d, %d}",
+				i, decoded[i].FingerprintID, decoded[i].Position, e.FingerprintID, e.Position)
+		}
+	}
+}
+
+func TestPFORPostingsLargeRoundTrip(t *testing.T) {
+	// Create 300 entries to exercise multiple PFOR blocks.
+	entries := make([]PostingEntry, 300)
+	id := uint32(1)
+	for i := range entries {
+		entries[i] = PostingEntry{FingerprintID: id, Position: uint16(i % 100)}
+		id += uint32(i%5 + 1)
+	}
+	encoded := wire.CompressPostingsPFOR(entries)
+	decoded, err := wire.DecompressPostingsPFOR(encoded, len(entries))
+	if err != nil {
+		t.Fatalf("DecompressPostingsPFOR: %v", err)
+	}
+	for i, e := range entries {
+		if decoded[i].FingerprintID != e.FingerprintID || decoded[i].Position != e.Position {
+			t.Errorf("entry %d: got {%d, %d}, want {%d, %d}",
+				i, decoded[i].FingerprintID, decoded[i].Position, e.FingerprintID, e.Position)
+			break
+		}
+	}
+}

@@ -112,6 +112,70 @@ func TestDataStoreLookupNotFound(t *testing.T) {
 	}
 }
 
+func TestDataStorePFORRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test_pfor.ckd")
+
+	datasetID := uuid.New()
+	const numRecords = 100
+	const fpCount = 50
+
+	b, err := NewDataStoreBuilder(path, CompressPFOR)
+	if err != nil {
+		t.Fatalf("NewDataStoreBuilder: %v", err)
+	}
+	b.SetDatasetID(datasetID)
+
+	type testRecord struct {
+		id         uint32
+		durationMs uint32
+		values     []uint32
+	}
+	records := make([]testRecord, numRecords)
+	for i := range records {
+		id, dur, vals := generateTestFingerprint(uint32(i+1)*10, fpCount)
+		records[i] = testRecord{id: id, durationMs: dur, values: vals}
+		if err := b.Add(id, dur, vals); err != nil {
+			t.Fatalf("Add: %v", err)
+		}
+	}
+
+	if err := b.Finish(); err != nil {
+		t.Fatalf("Finish: %v", err)
+	}
+
+	ds, err := OpenDataStore(path)
+	if err != nil {
+		t.Fatalf("OpenDataStore: %v", err)
+	}
+	defer ds.Close()
+
+	if ds.RecordCount() != numRecords {
+		t.Errorf("RecordCount: got %d, want %d", ds.RecordCount(), numRecords)
+	}
+
+	for _, tr := range records {
+		rec, err := ds.Lookup(tr.id)
+		if err != nil {
+			t.Fatalf("Lookup(%d): %v", tr.id, err)
+		}
+
+		fp, err := ds.ReadFingerprint(rec)
+		if err != nil {
+			t.Fatalf("ReadFingerprint(%d): %v", tr.id, err)
+		}
+		if len(fp.Values) != len(tr.values) {
+			t.Fatalf("values length: got %d, want %d", len(fp.Values), len(tr.values))
+		}
+		for j, v := range tr.values {
+			if fp.Values[j] != v {
+				t.Errorf("value[%d]: got %d, want %d", j, fp.Values[j], v)
+				break
+			}
+		}
+	}
+}
+
 func TestDataStoreBinarySearch(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.ckd")

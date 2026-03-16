@@ -7,6 +7,33 @@ import (
 	"github.com/google/uuid"
 )
 
+func buildTestDataStoreWith(t *testing.T, dir string, numFPs, fpCount int, compression CompressionMethod) (*DataStore, string, [][]uint32) {
+	t.Helper()
+	path := filepath.Join(dir, "test.ckd")
+	b, err := NewDataStoreBuilder(path, compression)
+	if err != nil {
+		t.Fatalf("NewDataStoreBuilder: %v", err)
+	}
+	b.SetDatasetID(uuid.New())
+
+	allValues := make([][]uint32, numFPs)
+	for i := 0; i < numFPs; i++ {
+		id, dur, vals := generateTestFingerprint(uint32(i+1), fpCount)
+		allValues[i] = vals
+		if err := b.Add(id, dur, vals); err != nil {
+			t.Fatalf("Add: %v", err)
+		}
+	}
+	if err := b.Finish(); err != nil {
+		t.Fatalf("Finish: %v", err)
+	}
+	ds, err := OpenDataStore(path)
+	if err != nil {
+		t.Fatalf("OpenDataStore: %v", err)
+	}
+	return ds, path, allValues
+}
+
 func buildTestDataStore(t *testing.T, dir string, numFPs, fpCount int) (*DataStore, string, [][]uint32) {
 	t.Helper()
 	path := filepath.Join(dir, "test.ckd")
@@ -136,5 +163,55 @@ func TestExtractBands(t *testing.T) {
 		if bands[i] != v {
 			t.Errorf("band[%d]: got 0x%02X, want 0x%02X", i, bands[i], v)
 		}
+	}
+}
+
+func TestSearchIndexPFORRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	ds, _, allValues := buildTestDataStoreWith(t, dir, 15, 30, CompressPFOR)
+	defer ds.Close()
+
+	idxPath := filepath.Join(dir, "test_pfor.ckx")
+	sb, err := NewSearchIndexBuilder(idxPath, CompressPFOR)
+	if err != nil {
+		t.Fatalf("NewSearchIndexBuilder: %v", err)
+	}
+	sb.SetDatasetID(ds.Header.DatasetID)
+	sb.SetTuningConfig(TuningConfig{
+		NumBands:       4,
+		BitsPerBand:    8,
+		BucketsPerBand: 256,
+		TotalBuckets:   1024,
+		Strategy:       TuneBalanced,
+	})
+
+	if err := sb.BuildFrom(ds); err != nil {
+		t.Fatalf("BuildFrom: %v", err)
+	}
+	if err := sb.Finish(); err != nil {
+		t.Fatalf("Finish: %v", err)
+	}
+
+	si, err := OpenSearchIndex(idxPath)
+	if err != nil {
+		t.Fatalf("OpenSearchIndex: %v", err)
+	}
+	defer si.Close()
+
+	results, err := si.Search(allValues[0])
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+
+	fpID := uint32(1)
+	found := false
+	for _, entry := range results {
+		if entry.FingerprintID == fpID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("PFOR Search did not find fingerprint ID %d in %d results", fpID, len(results))
 	}
 }
