@@ -3,7 +3,7 @@ package chroma
 import (
 	"testing"
 
-	"github.com/zephyraoss/libchroma/internal/wire"
+	"github.com/zephyraoss/libchroma/v2/internal/wire"
 )
 
 func TestVarintRoundTrip(t *testing.T) {

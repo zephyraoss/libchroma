@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/zephyraoss/libchroma/internal/cktype"
-	"github.com/zephyraoss/libchroma/internal/wire"
+	"github.com/zephyraoss/libchroma/v2/internal/cktype"
+	"github.com/zephyraoss/libchroma/v2/internal/wire"
 )
 
 func TruncateOverflow(path string, baseSize int64) error {

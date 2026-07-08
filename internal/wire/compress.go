@@ -3,7 +3,7 @@ package wire
 import (
 	"encoding/binary"
 
-	"github.com/zephyraoss/libchroma/internal/cktype"
+	"github.com/zephyraoss/libchroma/v2/internal/cktype"
 )
 
 func CompressFingerprint(values []uint32) []byte {

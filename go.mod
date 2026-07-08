@@ -1,4 +1,4 @@
-module github.com/zephyraoss/libchroma
+module github.com/zephyraoss/libchroma/v2
 
 go 1.24.10
 

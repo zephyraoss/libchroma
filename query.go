@@ -4,9 +4,9 @@ import (
 	"math/bits"
 	"sort"
 
-	"github.com/zephyraoss/libchroma/internal/datastore"
-	"github.com/zephyraoss/libchroma/internal/metadata"
-	"github.com/zephyraoss/libchroma/internal/searchindex"
+	"github.com/zephyraoss/libchroma/v2/internal/datastore"
+	"github.com/zephyraoss/libchroma/v2/internal/metadata"
+	"github.com/zephyraoss/libchroma/v2/internal/searchindex"
 )
 
 type candidate struct {

@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/zephyraoss/libchroma/internal/cktype"
+	"github.com/zephyraoss/libchroma/v2/internal/cktype"
 )
 
 func TestSpillSpoolRemovedOnFinishError(t *testing.T) {

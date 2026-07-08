@@ -6,11 +6,11 @@ import (
 	"os"
 	"sort"
 
-	"github.com/zephyraoss/libchroma/internal/cktype"
-	"github.com/zephyraoss/libchroma/internal/datastore"
-	"github.com/zephyraoss/libchroma/internal/metadata"
-	"github.com/zephyraoss/libchroma/internal/postingindex"
-	"github.com/zephyraoss/libchroma/internal/wire"
+	"github.com/zephyraoss/libchroma/v2/internal/cktype"
+	"github.com/zephyraoss/libchroma/v2/internal/datastore"
+	"github.com/zephyraoss/libchroma/v2/internal/metadata"
+	"github.com/zephyraoss/libchroma/v2/internal/postingindex"
+	"github.com/zephyraoss/libchroma/v2/internal/wire"
 )
 
 var (

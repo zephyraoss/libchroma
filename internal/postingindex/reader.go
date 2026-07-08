@@ -6,9 +6,9 @@ import (
 	"os"
 	"sort"
 
-	"github.com/zephyraoss/libchroma/internal/cktype"
-	"github.com/zephyraoss/libchroma/internal/mmap"
-	"github.com/zephyraoss/libchroma/internal/wire"
+	"github.com/zephyraoss/libchroma/v2/internal/cktype"
+	"github.com/zephyraoss/libchroma/v2/internal/mmap"
+	"github.com/zephyraoss/libchroma/v2/internal/wire"
 )
 
 var overflowMagicCKI = [8]byte{'C', 'K', 'A', 'F', '-', 'I', 'O', 0}

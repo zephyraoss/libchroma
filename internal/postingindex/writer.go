@@ -11,9 +11,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/zephyraoss/libchroma/internal/cktype"
-	"github.com/zephyraoss/libchroma/internal/datastore"
-	"github.com/zephyraoss/libchroma/internal/wire"
+	"github.com/zephyraoss/libchroma/v2/internal/cktype"
+	"github.com/zephyraoss/libchroma/v2/internal/datastore"
+	"github.com/zephyraoss/libchroma/v2/internal/wire"
 )
 
 const (

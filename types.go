@@ -1,6 +1,6 @@
 package chroma
 
-import "github.com/zephyraoss/libchroma/internal/cktype"
+import "github.com/zephyraoss/libchroma/v2/internal/cktype"
 
 type (
 	CompressionMethod     = cktype.CompressionMethod

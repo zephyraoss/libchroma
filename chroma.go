@@ -5,12 +5,12 @@ import (
 	"os"
 
 	"github.com/google/uuid"
-	"github.com/zephyraoss/libchroma/internal/datastore"
-	"github.com/zephyraoss/libchroma/internal/maintenance"
-	"github.com/zephyraoss/libchroma/internal/metadata"
-	"github.com/zephyraoss/libchroma/internal/postingindex"
-	"github.com/zephyraoss/libchroma/internal/searchindex"
-	"github.com/zephyraoss/libchroma/internal/wire"
+	"github.com/zephyraoss/libchroma/v2/internal/datastore"
+	"github.com/zephyraoss/libchroma/v2/internal/maintenance"
+	"github.com/zephyraoss/libchroma/v2/internal/metadata"
+	"github.com/zephyraoss/libchroma/v2/internal/postingindex"
+	"github.com/zephyraoss/libchroma/v2/internal/searchindex"
+	"github.com/zephyraoss/libchroma/v2/internal/wire"
 )
 
 type Dataset struct {

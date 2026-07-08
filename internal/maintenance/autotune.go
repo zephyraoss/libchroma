@@ -1,6 +1,6 @@
 package maintenance
 
-import "github.com/zephyraoss/libchroma/internal/cktype"
+import "github.com/zephyraoss/libchroma/v2/internal/cktype"
 
 func AutoTuneParams(recordCount uint64, strategy cktype.TuningStrategy, availableRAM, storageBudget uint64) cktype.TuningConfig {
 	type candidate struct {

@@ -1,6 +1,6 @@
 package wire
 
-import "github.com/zephyraoss/libchroma/internal/cktype"
+import "github.com/zephyraoss/libchroma/v2/internal/cktype"
 
 func AppendVarint(buf []byte, v uint32) []byte {
 	for v >= 0x80 {

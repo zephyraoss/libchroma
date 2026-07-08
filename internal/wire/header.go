@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/zephyraoss/libchroma/internal/cktype"
+	"github.com/zephyraoss/libchroma/v2/internal/cktype"
 )
 
 const (
