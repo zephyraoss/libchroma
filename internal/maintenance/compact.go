@@ -7,10 +7,10 @@ import (
 	"github.com/zephyraoss/libchroma/internal/cktype"
 	"github.com/zephyraoss/libchroma/internal/datastore"
 	"github.com/zephyraoss/libchroma/internal/metadata"
+	"github.com/zephyraoss/libchroma/internal/postingindex"
 	"github.com/zephyraoss/libchroma/internal/searchindex"
 )
 
-// CompactDataStore merges main and overflow records into a new clean .ckd file.
 func CompactDataStore(srcPath, dstPath string) error {
 	src, err := datastore.Open(srcPath)
 	if err != nil {
@@ -80,7 +80,6 @@ func CompactDataStore(srcPath, dstPath string) error {
 	return dst.Finish()
 }
 
-// CompactSearchIndex rebuilds a search index from a compacted datastore.
 func CompactSearchIndex(srcPath, dstPath string, ds *datastore.DataStore) error {
 	src, err := searchindex.Open(srcPath)
 	if err != nil {
@@ -104,7 +103,29 @@ func CompactSearchIndex(srcPath, dstPath string, ds *datastore.DataStore) error 
 	return builder.Finish()
 }
 
-// CompactMetadata merges main and overflow mapping records into a new .ckm file.
+func CompactPostingIndex(srcPath, dstPath string, ds *datastore.DataStore) error {
+	src, err := postingindex.Open(srcPath)
+	if err != nil {
+		return fmt.Errorf("opening source posting index: %w", err)
+	}
+	tuning := src.Tuning
+	datasetID := src.Header.DatasetID
+	src.Close()
+
+	builder, err := postingindex.NewBuilder(dstPath)
+	if err != nil {
+		return fmt.Errorf("creating posting index builder: %w", err)
+	}
+	builder.SetDatasetID(datasetID)
+	builder.SetTuningConfig(tuning)
+
+	if err := builder.BuildFrom(ds); err != nil {
+		return fmt.Errorf("building posting index: %w", err)
+	}
+
+	return builder.Finish()
+}
+
 func CompactMetadata(srcPath, dstPath string) error {
 	src, err := metadata.Open(srcPath)
 	if err != nil {
@@ -165,7 +186,6 @@ func CompactMetadata(srcPath, dstPath string) error {
 	return builder.Finish()
 }
 
-// CompactDataset performs a full compaction of all dataset files.
 func CompactDataset(prefix string) error {
 	if err := CompactDataStore(prefix+".ckd", prefix+".ckd.tmp"); err != nil {
 		return fmt.Errorf("compacting datastore: %w", err)
@@ -176,9 +196,18 @@ func CompactDataset(prefix string) error {
 		return fmt.Errorf("opening compacted datastore: %w", err)
 	}
 
-	if err := CompactSearchIndex(prefix+".ckx", prefix+".ckx.tmp", newDS); err != nil {
-		newDS.Close()
-		return fmt.Errorf("compacting search index: %w", err)
+	if _, err := os.Stat(prefix + ".ckx"); err == nil {
+		if err := CompactSearchIndex(prefix+".ckx", prefix+".ckx.tmp", newDS); err != nil {
+			newDS.Close()
+			return fmt.Errorf("compacting search index: %w", err)
+		}
+	}
+
+	if _, err := os.Stat(prefix + ".cki"); err == nil {
+		if err := CompactPostingIndex(prefix+".cki", prefix+".cki.tmp", newDS); err != nil {
+			newDS.Close()
+			return fmt.Errorf("compacting posting index: %w", err)
+		}
 	}
 	newDS.Close()
 
@@ -191,8 +220,15 @@ func CompactDataset(prefix string) error {
 	if err := os.Rename(prefix+".ckd.tmp", prefix+".ckd"); err != nil {
 		return fmt.Errorf("renaming compacted datastore: %w", err)
 	}
-	if err := os.Rename(prefix+".ckx.tmp", prefix+".ckx"); err != nil {
-		return fmt.Errorf("renaming compacted search index: %w", err)
+	if _, err := os.Stat(prefix + ".ckx.tmp"); err == nil {
+		if err := os.Rename(prefix+".ckx.tmp", prefix+".ckx"); err != nil {
+			return fmt.Errorf("renaming compacted search index: %w", err)
+		}
+	}
+	if _, err := os.Stat(prefix + ".cki.tmp"); err == nil {
+		if err := os.Rename(prefix+".cki.tmp", prefix+".cki"); err != nil {
+			return fmt.Errorf("renaming compacted posting index: %w", err)
+		}
 	}
 	if _, err := os.Stat(prefix + ".ckm.tmp"); err == nil {
 		if err := os.Rename(prefix+".ckm.tmp", prefix+".ckm"); err != nil {

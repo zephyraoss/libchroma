@@ -202,7 +202,6 @@ func TestPFORPostingsRoundTrip(t *testing.T) {
 }
 
 func TestPFORPostingsLargeRoundTrip(t *testing.T) {
-	// Create 300 entries to exercise multiple PFOR blocks.
 	entries := make([]PostingEntry, 300)
 	id := uint32(1)
 	for i := range entries {

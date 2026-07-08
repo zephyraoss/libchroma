@@ -10,7 +10,6 @@ import (
 
 const PFORBlockSize = 128
 
-// CompressFingerprintPFOR compresses using XOR-delta + PFOR bitpacking.
 func CompressFingerprintPFOR(values []uint32) ([]byte, error) {
 	if len(values) == 0 {
 		return nil, nil
@@ -23,7 +22,6 @@ func CompressFingerprintPFOR(values []uint32) ([]byte, error) {
 		return buf, nil
 	}
 
-	// Compute XOR deltas.
 	deltas := make([]uint32, len(values)-1)
 	prev := values[0]
 	for i := 1; i < len(values); i++ {
@@ -31,7 +29,6 @@ func CompressFingerprintPFOR(values []uint32) ([]byte, error) {
 		prev = values[i]
 	}
 
-	// Encode in PFOR blocks of 128.
 	for start := 0; start < len(deltas); start += PFORBlockSize {
 		end := start + PFORBlockSize
 		if end > len(deltas) {
@@ -43,7 +40,6 @@ func CompressFingerprintPFOR(values []uint32) ([]byte, error) {
 	return buf, nil
 }
 
-// DecompressFingerprintPFOR decompresses XOR-delta + PFOR encoded data.
 func DecompressFingerprintPFOR(data []byte, rawCount int) ([]uint32, error) {
 	if rawCount == 0 {
 		return nil, nil
@@ -83,8 +79,6 @@ func DecompressFingerprintPFOR(data []byte, rawCount int) ([]uint32, error) {
 	return values, nil
 }
 
-// CompressPostingsPFOR compresses posting entries using delta + PFOR for IDs
-// and a parallel raw u16 array for positions.
 func CompressPostingsPFOR(entries []cktype.PostingEntry) []byte {
 	if len(entries) == 0 {
 		return nil
@@ -95,7 +89,6 @@ func CompressPostingsPFOR(entries []cktype.PostingEntry) []byte {
 	binary.LittleEndian.PutUint32(tmp[:], entries[0].FingerprintID)
 	buf = append(buf, tmp[:]...)
 
-	// Compute additive deltas for remaining IDs.
 	if len(entries) > 1 {
 		deltas := make([]uint32, len(entries)-1)
 		prevID := entries[0].FingerprintID
@@ -113,7 +106,6 @@ func CompressPostingsPFOR(entries []cktype.PostingEntry) []byte {
 		}
 	}
 
-	// Append all positions as raw u16.
 	var ptmp [2]byte
 	for _, e := range entries {
 		binary.LittleEndian.PutUint16(ptmp[:], e.Position)
@@ -123,7 +115,6 @@ func CompressPostingsPFOR(entries []cktype.PostingEntry) []byte {
 	return buf
 }
 
-// DecompressPostingsPFOR decompresses a PFOR-encoded posting list.
 func DecompressPostingsPFOR(data []byte, count int) ([]cktype.PostingEntry, error) {
 	if count == 0 {
 		return nil, nil
@@ -140,7 +131,6 @@ func DecompressPostingsPFOR(data []byte, count int) ([]cktype.PostingEntry, erro
 	offset := 4
 	prevID := firstID
 
-	// Decode PFOR blocks for deltas.
 	remaining := count - 1
 	idx := 1
 	for remaining > 0 {
@@ -163,7 +153,6 @@ func DecompressPostingsPFOR(data []byte, count int) ([]cktype.PostingEntry, erro
 		remaining -= blockCount
 	}
 
-	// Read positions as raw u16.
 	posBytes := count * 2
 	if offset+posBytes > len(data) {
 		return nil, cktype.ErrInvalidCompression
@@ -176,7 +165,6 @@ func DecompressPostingsPFOR(data []byte, count int) ([]cktype.PostingEntry, erro
 	return entries, nil
 }
 
-// chooseBitWidth returns the minimum bit width covering >= 90% of values.
 func chooseBitWidth(values []uint32) uint8 {
 	if len(values) == 0 {
 		return 0
@@ -192,7 +180,6 @@ func chooseBitWidth(values []uint32) uint8 {
 	}
 	sort.Ints(widths)
 
-	// Index covering 90% of values.
 	idx := len(values)*9/10 - 1
 	if idx < 0 {
 		idx = 0
@@ -208,11 +195,9 @@ type pforException struct {
 	value uint32
 }
 
-// appendPFORBlock encodes a block of up to 128 values in PFOR format.
 func appendPFORBlock(buf []byte, values []uint32) []byte {
 	b := chooseBitWidth(values)
 
-	// Find exceptions: values that don't fit in b bits.
 	var exceptions []pforException
 	var mask uint32
 	if b >= 32 {
@@ -229,13 +214,11 @@ func appendPFORBlock(buf []byte, values []uint32) []byte {
 
 	buf = append(buf, b, uint8(len(exceptions)))
 
-	// Pack values at b bits each.
 	if b > 0 {
 		packed := packBits(values, b)
 		buf = append(buf, packed...)
 	}
 
-	// Append exceptions: (index u8, value u32).
 	var etmp [4]byte
 	for _, exc := range exceptions {
 		buf = append(buf, exc.index)
@@ -246,7 +229,6 @@ func appendPFORBlock(buf []byte, values []uint32) []byte {
 	return buf
 }
 
-// decodePFORBlock decodes a PFOR block, returning the values and bytes consumed.
 func decodePFORBlock(data []byte, offset int, count int) ([]uint32, int, error) {
 	if offset+2 > len(data) {
 		return nil, 0, cktype.ErrInvalidCompression
@@ -273,7 +255,6 @@ func decodePFORBlock(data []byte, offset int, count int) ([]uint32, int, error) 
 	}
 	consumed += packedSize
 
-	// Read and apply exceptions.
 	excSize := numExceptions * 5
 	if offset+consumed+excSize > len(data) {
 		return nil, 0, cktype.ErrInvalidCompression
@@ -293,7 +274,6 @@ func decodePFORBlock(data []byte, offset int, count int) ([]uint32, int, error) 
 	return values, consumed, nil
 }
 
-// packBits packs values at b bits each into a byte slice (little-endian bit order).
 func packBits(values []uint32, b uint8) []byte {
 	totalBits := len(values) * int(b)
 	numBytes := (totalBits + 7) / 8
@@ -330,7 +310,6 @@ func packBits(values []uint32, b uint8) []byte {
 	return out
 }
 
-// unpackBits unpacks count values at b bits each from data (little-endian bit order).
 func unpackBits(data []byte, b uint8, count int) []uint32 {
 	values := make([]uint32, count)
 

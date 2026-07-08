@@ -9,15 +9,16 @@ import (
 	"github.com/zephyraoss/libchroma/internal/cktype"
 	"github.com/zephyraoss/libchroma/internal/datastore"
 	"github.com/zephyraoss/libchroma/internal/metadata"
+	"github.com/zephyraoss/libchroma/internal/postingindex"
 	"github.com/zephyraoss/libchroma/internal/wire"
 )
 
 var (
 	overflowMagicCKD = [8]byte{'C', 'K', 'A', 'F', '-', 'D', 'O', 0}
 	overflowMagicCKX = [8]byte{'C', 'K', 'A', 'F', '-', 'X', 'O', 0}
+	overflowMagicCKI = [8]byte{'C', 'K', 'A', 'F', '-', 'I', 'O', 0}
 )
 
-// AppendDataStoreOverflow appends overflow records to a .ckd file.
 func AppendDataStoreOverflow(path string, records []cktype.OverflowRecord) error {
 	f, err := os.OpenFile(path, os.O_RDWR, 0)
 	if err != nil {
@@ -31,6 +32,21 @@ func AppendDataStoreOverflow(path string, records []cktype.OverflowRecord) error
 	}
 	fileSize := fi.Size()
 
+	header, err := wire.ReadHeader(f, wire.MagicCKD, fileSize)
+	if err != nil {
+		return err
+	}
+	compress := wire.CompressFingerprint
+	if header.Flags&0x1 != 0 {
+		compress = func(values []uint32) []byte {
+			comp, err := wire.CompressFingerprintPFOR(values)
+			if err != nil {
+				return nil
+			}
+			return comp
+		}
+	}
+
 	sort.Slice(records, func(i, j int) bool {
 		return records[i].FingerprintID < records[j].FingerprintID
 	})
@@ -43,12 +59,18 @@ func AppendDataStoreOverflow(path string, records []cktype.OverflowRecord) error
 	}
 	compressed := make([]compressedRec, len(records))
 	for i, rec := range records {
+		if len(rec.Values) == 0 {
+			return fmt.Errorf("ckaf: overflow fingerprint %d has no sub-fingerprints", rec.FingerprintID)
+		}
 		if len(rec.Values) > 0xFFFF {
 			return fmt.Errorf("ckaf: overflow fingerprint %d has %d sub-fingerprints, exceeds u16 max", rec.FingerprintID, len(rec.Values))
 		}
-		comp := wire.CompressFingerprint(rec.Values)
+		comp := compress(rec.Values)
 		if len(comp) > 0xFFFF {
 			return fmt.Errorf("ckaf: overflow fingerprint %d compressed to %d bytes, exceeds u16 max", rec.FingerprintID, len(comp))
+		}
+		if len(comp) == 0 {
+			return fmt.Errorf("ckaf: overflow fingerprint %d failed to compress", rec.FingerprintID)
 		}
 		compressed[i] = compressedRec{
 			fingerprintID: rec.FingerprintID,
@@ -117,7 +139,6 @@ func AppendDataStoreOverflow(path string, records []cktype.OverflowRecord) error
 	return nil
 }
 
-// AppendSearchIndexOverflow appends overflow posting lists to a .ckx file.
 func AppendSearchIndexOverflow(path string, ds *datastore.DataStore, newFingerprintIDs []uint32) error {
 	f, err := os.OpenFile(path, os.O_RDWR, 0)
 	if err != nil {
@@ -249,7 +270,114 @@ func AppendSearchIndexOverflow(path string, ds *datastore.DataStore, newFingerpr
 	return nil
 }
 
-// AppendMetadataOverflow appends overflow mapping records to a .ckm file.
+func AppendPostingIndexOverflow(path string, ds *datastore.DataStore, newFingerprintIDs []uint32) error {
+	return appendPostingIndexOverflow(path, func(id uint32) ([]uint32, error) {
+		rec, err := ds.Lookup(id)
+		if err != nil {
+			return nil, fmt.Errorf("looking up fingerprint %d: %w", id, err)
+		}
+		fp, err := ds.ReadFingerprint(rec)
+		if err != nil {
+			return nil, fmt.Errorf("reading fingerprint %d: %w", id, err)
+		}
+		return fp.Values, nil
+	}, newFingerprintIDs)
+}
+
+func AppendPostingIndexOverflowValues(path string, records []cktype.OverflowRecord) error {
+	byID := make(map[uint32][]uint32, len(records))
+	ids := make([]uint32, 0, len(records))
+	for _, rec := range records {
+		if _, ok := byID[rec.FingerprintID]; ok {
+			continue
+		}
+		byID[rec.FingerprintID] = rec.Values
+		ids = append(ids, rec.FingerprintID)
+	}
+	return appendPostingIndexOverflow(path, func(id uint32) ([]uint32, error) {
+		return byID[id], nil
+	}, ids)
+}
+
+func appendPostingIndexOverflow(path string, values func(id uint32) ([]uint32, error), ids []uint32) error {
+	f, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		return fmt.Errorf("opening posting index for overflow: %w", err)
+	}
+	defer f.Close()
+
+	fi, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	fileSize := fi.Size()
+
+	if _, err := wire.ReadHeader(f, wire.MagicCKI, fileSize); err != nil {
+		return err
+	}
+
+	var tcBuf [postingindex.TuningConfigSize]byte
+	if _, err := f.ReadAt(tcBuf[:], postingindex.TuningConfigOffset); err != nil {
+		return fmt.Errorf("reading tuning config: %w", err)
+	}
+	stride := tcBuf[0]
+	qbits := tcBuf[1]
+	skipInterval := binary.LittleEndian.Uint32(tcBuf[0x02:])
+
+	var postings []postingindex.Posting
+	for _, fpID := range ids {
+		vals, err := values(fpID)
+		if err != nil {
+			return err
+		}
+		postings = postingindex.AppendSampled(postings, fpID, vals, stride, qbits)
+	}
+
+	sorted := postingindex.Prepare(postings)
+	blob, skip, _ := postingindex.EncodePostings(sorted, skipInterval)
+
+	overflowOffset := fileSize - wire.FooterSize
+
+	var hdr [16]byte
+	copy(hdr[0:8], overflowMagicCKI[:])
+	binary.LittleEndian.PutUint32(hdr[8:12], uint32(len(sorted)))
+	binary.LittleEndian.PutUint32(hdr[12:16], uint32(len(skip)))
+	if _, err := f.WriteAt(hdr[:], overflowOffset); err != nil {
+		return err
+	}
+
+	skipDir := make([]byte, len(skip)*postingindex.SkipEntrySize)
+	for i, e := range skip {
+		off := i * postingindex.SkipEntrySize
+		binary.LittleEndian.PutUint32(skipDir[off:], e.Hash)
+		binary.LittleEndian.PutUint64(skipDir[off+4:], e.Offset)
+	}
+	skipDirOffset := overflowOffset + 16
+	if _, err := f.WriteAt(skipDir, skipDirOffset); err != nil {
+		return err
+	}
+
+	postingDataOffset := skipDirOffset + int64(len(skipDir))
+	if _, err := f.WriteAt(blob, postingDataOffset); err != nil {
+		return err
+	}
+
+	newFooterOffset := postingDataOffset + int64(len(blob))
+	footer := cktype.Footer{
+		OverflowOffset: uint64(overflowOffset),
+		Magic:          wire.FooterMagicCKI,
+	}
+	if err := wire.WriteFooter(f, newFooterOffset, footer); err != nil {
+		return err
+	}
+
+	if err := wire.SetHeaderFlagBit(f, f, 0x2); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func AppendMetadataOverflow(path string, records []cktype.OverflowMappingRecord) error {
 	f, err := os.OpenFile(path, os.O_RDWR, 0)
 	if err != nil {

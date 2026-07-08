@@ -39,5 +39,7 @@ func Unmap(m *Data) error {
 	if m.Bytes == nil {
 		return nil
 	}
-	return windows.UnmapViewOfFile(uintptr(unsafe.Pointer(&m.Bytes[0])))
+	addr := uintptr(unsafe.Pointer(&m.Bytes[0]))
+	m.Bytes = nil
+	return windows.UnmapViewOfFile(addr)
 }

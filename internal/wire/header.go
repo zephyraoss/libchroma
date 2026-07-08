@@ -18,9 +18,9 @@ var (
 	MagicCKD = [8]byte{'C', 'K', 'A', 'F', '-', 'D', 0, 0}
 	MagicCKX = [8]byte{'C', 'K', 'A', 'F', '-', 'X', 0, 0}
 	MagicCKM = [8]byte{'C', 'K', 'A', 'F', '-', 'M', 0, 0}
+	MagicCKI = [8]byte{'C', 'K', 'A', 'F', '-', 'I', 0, 0}
 )
 
-// ReadHeader reads and validates a 96-byte CKAF header from r.
 func ReadHeader(r io.ReaderAt, expectedMagic [8]byte, fileSize int64) (cktype.FileHeader, error) {
 	if fileSize < HeaderSize {
 		return cktype.FileHeader{}, fmt.Errorf("%w: file too small for header", cktype.ErrBadMagic)
@@ -65,7 +65,6 @@ func ReadHeader(r io.ReaderAt, expectedMagic [8]byte, fileSize int64) (cktype.Fi
 	return h, nil
 }
 
-// WriteHeader writes a 96-byte CKAF header to w at offset 0.
 func WriteHeader(w io.WriterAt, h cktype.FileHeader) error {
 	var buf [HeaderSize]byte
 	copy(buf[0:8], h.Magic[:])
@@ -86,7 +85,6 @@ func WriteHeader(w io.WriterAt, h cktype.FileHeader) error {
 	return err
 }
 
-// ValidateFlags checks that no unknown flag bits are set.
 func ValidateFlags(flags uint32, knownMask uint32) error {
 	if flags & ^knownMask != 0 {
 		return fmt.Errorf("%w: 0x%08X", cktype.ErrUnknownFlags, flags & ^knownMask)
@@ -94,8 +92,6 @@ func ValidateFlags(flags uint32, knownMask uint32) error {
 	return nil
 }
 
-// SetHeaderFlagBit reads the current flags from offset 0x0C, ORs with the given
-// bits, and writes them back.
 func SetHeaderFlagBit(f io.ReaderAt, w io.WriterAt, bits uint32) error {
 	var buf [4]byte
 	if _, err := f.ReadAt(buf[:], 0x0C); err != nil {
@@ -103,6 +99,20 @@ func SetHeaderFlagBit(f io.ReaderAt, w io.WriterAt, bits uint32) error {
 	}
 	flags := binary.LittleEndian.Uint32(buf[:])
 	flags |= bits
+	binary.LittleEndian.PutUint32(buf[:], flags)
+	if _, err := w.WriteAt(buf[:], 0x0C); err != nil {
+		return fmt.Errorf("writing flags: %w", err)
+	}
+	return nil
+}
+
+func ClearHeaderFlagBit(f io.ReaderAt, w io.WriterAt, bits uint32) error {
+	var buf [4]byte
+	if _, err := f.ReadAt(buf[:], 0x0C); err != nil {
+		return fmt.Errorf("reading flags: %w", err)
+	}
+	flags := binary.LittleEndian.Uint32(buf[:])
+	flags &^= bits
 	binary.LittleEndian.PutUint32(buf[:], flags)
 	if _, err := w.WriteAt(buf[:], 0x0C); err != nil {
 		return fmt.Errorf("writing flags: %w", err)

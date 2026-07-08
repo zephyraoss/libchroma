@@ -14,7 +14,6 @@ const RecordSize = 20
 
 var overflowMagicCKD = [8]byte{'C', 'K', 'A', 'F', '-', 'D', 'O', 0}
 
-// DataStore provides read access to a .ckd file via memory-mapping.
 type DataStore struct {
 	F           *os.File
 	Mmap        *mmap.Data
@@ -26,11 +25,10 @@ type DataStore struct {
 
 	OverflowCount     uint32
 	OverflowDataOff   uint32
-	OverflowStart     int64 // absolute offset of overflow record table
-	OverflowDataStart int64 // absolute offset of overflow data blob
+	OverflowStart     int64
+	OverflowDataStart int64
 }
 
-// Open opens and validates a .ckd file for reading.
 func Open(path string) (*DataStore, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -122,7 +120,6 @@ func (ds *DataStore) readOverflowHeader() error {
 	return nil
 }
 
-// Close releases the memory map and closes the file.
 func (ds *DataStore) Close() error {
 	if err := mmap.Unmap(ds.Mmap); err != nil {
 		ds.F.Close()
@@ -131,7 +128,6 @@ func (ds *DataStore) Close() error {
 	return ds.F.Close()
 }
 
-// Lookup finds a record by fingerprint ID using binary search.
 func (ds *DataStore) Lookup(id uint32) (*cktype.Record, error) {
 	if ds.HasOvfl && ds.OverflowCount > 0 {
 		rec, err := ds.SearchTable(id, ds.OverflowStart, int(ds.OverflowCount))
@@ -149,7 +145,6 @@ func (ds *DataStore) Lookup(id uint32) (*cktype.Record, error) {
 	return rec, nil
 }
 
-// SearchTable performs a binary search within a record table.
 func (ds *DataStore) SearchTable(id uint32, tableStart int64, count int) (*cktype.Record, error) {
 	lo, hi := 0, count-1
 	for lo <= hi {
@@ -173,7 +168,6 @@ func (ds *DataStore) SearchTable(id uint32, tableStart int64, count int) (*cktyp
 	return nil, cktype.ErrRecordNotFound
 }
 
-// ReadRecordAt reads a single record at the given byte offset.
 func (ds *DataStore) ReadRecordAt(off int64) (*cktype.Record, error) {
 	var buf [RecordSize]byte
 	if _, err := ds.Mmap.ReadAt(buf[:], off); err != nil {
@@ -190,7 +184,6 @@ func (ds *DataStore) ReadRecordAt(off int64) (*cktype.Record, error) {
 	return rec, nil
 }
 
-// ReadFingerprint reads and decompresses the fingerprint data for a record.
 func (ds *DataStore) ReadFingerprint(rec *cktype.Record) (*cktype.Fingerprint, error) {
 	if rec.FromOverflow {
 		return ds.ReadFingerprintFromOverflow(rec)
@@ -213,7 +206,6 @@ func (ds *DataStore) ReadFingerprint(rec *cktype.Record) (*cktype.Fingerprint, e
 	}, nil
 }
 
-// ReadFingerprintFromOverflow reads fingerprint data using overflow data offsets.
 func (ds *DataStore) ReadFingerprintFromOverflow(rec *cktype.Record) (*cktype.Fingerprint, error) {
 	absOffset := ds.OverflowDataStart + int64(rec.DataOffset)
 	data := make([]byte, rec.DataLength)
@@ -242,7 +234,6 @@ func (ds *DataStore) decompress(data []byte, rawCount int) ([]uint32, error) {
 	}
 }
 
-// RecordCount returns the number of records in the main table.
 func (ds *DataStore) RecordCount() uint64 {
 	return ds.Header.RecordCount
 }

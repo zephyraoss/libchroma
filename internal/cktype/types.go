@@ -35,11 +35,11 @@ type FileHeader struct {
 
 type Record struct {
 	FingerprintID uint32
-	DataOffset    uint64 // u48 on disk, stored as u64 in memory
+	DataOffset    uint64
 	DataLength    uint16
 	DurationMs    uint32
 	RawCount      uint16
-	FromOverflow  bool // true if this record came from the overflow table
+	FromOverflow  bool
 }
 
 type Fingerprint struct {
@@ -53,12 +53,29 @@ type PostingEntry struct {
 	Position      uint16
 }
 
+type SampledPosting struct {
+	FingerprintID uint32
+	Ordinal       uint8
+}
+
+type PostingHit struct {
+	FingerprintID uint32
+	Hits          int
+	Delta         int
+}
+
+type PostingQueryOptions struct {
+	MinHits int
+	TopK    int
+}
+
 type MappingRecord struct {
 	FingerprintID uint32
 	MBID          uuid.UUID
 	TrackID       uint32
 	StringOffset  uint32
 	StringLength  uint32
+	FromOverflow  bool
 }
 
 type TrackMetadata struct {
@@ -97,6 +114,12 @@ type TuningConfig struct {
 	TotalPostings        uint64
 	AvgPostingsPerBucket uint32
 	Strategy             TuningStrategy
+
+	Stride         uint8
+	QBits          uint8
+	SkipInterval   uint32
+	BucketCount    uint32
+	SkipEntryCount uint32
 }
 
 type BucketEntry struct {
@@ -121,12 +144,15 @@ type DatasetOptions struct {
 }
 
 type DatasetStats struct {
-	RecordCount   uint64
-	HasOverflow   bool
-	OverflowCount uint32
-	HasMetadata   bool
-	MetadataCount uint64
-	TuningConfig  TuningConfig
+	RecordCount        uint64
+	HasOverflow        bool
+	OverflowCount      uint32
+	HasMetadata        bool
+	MetadataCount      uint64
+	HasSearchIndex     bool
+	TuningConfig       TuningConfig
+	HasPostingIndex    bool
+	PostingIndexTuning TuningConfig
 }
 
 type OverflowRecord struct {

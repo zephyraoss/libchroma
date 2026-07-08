@@ -14,4 +14,7 @@ var (
 	ErrEmptyDataset       = cktype.ErrEmptyDataset
 	ErrInvalidCompression = cktype.ErrInvalidCompression
 	ErrTruncatedVarint    = cktype.ErrTruncatedVarint
+	ErrNoPostingIndex     = cktype.ErrNoPostingIndex
+	ErrNoSearchIndex      = cktype.ErrNoSearchIndex
+	ErrNoIndex            = cktype.ErrNoIndex
 )

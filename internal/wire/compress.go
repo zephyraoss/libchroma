@@ -6,7 +6,6 @@ import (
 	"github.com/zephyraoss/libchroma/internal/cktype"
 )
 
-// CompressFingerprint compresses sub-fingerprint values using XOR-delta + varint encoding.
 func CompressFingerprint(values []uint32) []byte {
 	if len(values) == 0 {
 		return nil
@@ -23,7 +22,6 @@ func CompressFingerprint(values []uint32) []byte {
 	return buf
 }
 
-// DecompressFingerprint decompresses XOR-delta + varint encoded fingerprint data.
 func DecompressFingerprint(data []byte, rawCount int) ([]uint32, error) {
 	if rawCount == 0 {
 		return nil, nil

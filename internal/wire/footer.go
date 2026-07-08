@@ -14,9 +14,9 @@ var (
 	FooterMagicCKD = [8]byte{'C', 'K', 'A', 'F', '-', 'D', 'F', 0}
 	FooterMagicCKX = [8]byte{'C', 'K', 'A', 'F', '-', 'X', 'F', 0}
 	FooterMagicCKM = [8]byte{'C', 'K', 'A', 'F', '-', 'M', 'F', 0}
+	FooterMagicCKI = [8]byte{'C', 'K', 'A', 'F', '-', 'I', 'F', 0}
 )
 
-// ReadFooter reads and validates the 16-byte footer from the end of the file.
 func ReadFooter(r io.ReaderAt, fileSize int64, expectedMagic [8]byte) (cktype.Footer, error) {
 	if fileSize < HeaderSize+FooterSize {
 		return cktype.Footer{}, fmt.Errorf("%w: file too small for footer", cktype.ErrBadMagic)
@@ -43,7 +43,6 @@ func ReadFooter(r io.ReaderAt, fileSize int64, expectedMagic [8]byte) (cktype.Fo
 	return f, nil
 }
 
-// WriteFooter writes a 16-byte footer at the given offset.
 func WriteFooter(w io.WriterAt, offset int64, f cktype.Footer) error {
 	var buf [FooterSize]byte
 	binary.LittleEndian.PutUint64(buf[0:8], f.OverflowOffset)

@@ -13,7 +13,6 @@ import (
 	"github.com/zephyraoss/libchroma/internal/wire"
 )
 
-// Builder constructs a .ckm file.
 type Builder struct {
 	f           *os.File
 	path        string
@@ -29,7 +28,6 @@ type buildRecord struct {
 	metadata      *cktype.TrackMetadata
 }
 
-// NewBuilder creates a new builder that writes a .ckm file at path.
 func NewBuilder(path string, includeText bool) (*Builder, error) {
 	f, err := os.CreateTemp(filepath.Dir(path), "ckm-build-*.tmp")
 	if err != nil {
@@ -42,12 +40,10 @@ func NewBuilder(path string, includeText bool) (*Builder, error) {
 	}, nil
 }
 
-// SetDatasetID sets the dataset UUID written to the file header.
 func (b *Builder) SetDatasetID(id uuid.UUID) {
 	b.datasetID = id
 }
 
-// Add accumulates a mapping record.
 func (b *Builder) Add(fingerprintID uint32, mbid uuid.UUID, trackID uint32, meta *cktype.TrackMetadata) error {
 	b.records = append(b.records, buildRecord{
 		fingerprintID: fingerprintID,
@@ -58,8 +54,6 @@ func (b *Builder) Add(fingerprintID uint32, mbid uuid.UUID, trackID uint32, meta
 	return nil
 }
 
-// Finish sorts records, builds the mapping table and string pool, writes
-// header and footer, and atomically renames the temp file to the final path.
 func (b *Builder) Finish() error {
 
 	sort.Slice(b.records, func(i, j int) bool {

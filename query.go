@@ -24,12 +24,14 @@ func defaultQueryOptions() QueryOptions {
 	}
 }
 
-// QueryDataset performs a full similarity lookup across the dataset.
 func QueryDataset(ds *DataStore, si *SearchIndex, mm *MetadataMap, fingerprint []uint32, durationMs uint32, opts *QueryOptions) ([]MatchResult, error) {
 	return queryDataset(ds, si, mm, fingerprint, durationMs, opts)
 }
 
 func queryDataset(ds *datastore.DataStore, si *searchindex.SearchIndex, mm *metadata.MetadataMap, fingerprint []uint32, durationMs uint32, opts *QueryOptions) ([]MatchResult, error) {
+	if si == nil {
+		return nil, ErrNoSearchIndex
+	}
 	if len(fingerprint) == 0 {
 		return nil, nil
 	}

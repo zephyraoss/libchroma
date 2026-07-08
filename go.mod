@@ -2,4 +2,4 @@ module github.com/zephyraoss/libchroma
 
 go 1.24.10
 
-require github.com/google/uuid v1.6.0 // indirect
+require github.com/google/uuid v1.6.0

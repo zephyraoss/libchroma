@@ -4,9 +4,9 @@ Authors:
   Addison LeClair <me@addi.lol>
   Zephyra LLC
 License: [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/)
-Version: 0.1.1-draft  
+Version: 0.2.0-draft  
 Intended Status: Informational  
-Date: 2026-03-16
+Date: 2026-07-07
 
 ## Status of This Memo
 
@@ -28,6 +28,9 @@ CKAF is designed to minimize RAM usage, support append-only incremental
 updates, permit regeneration of derived data, and avoid dependence on an
 external database engine. A complete CKAF dataset consists of three files: a
 data store (`.ckd`), a search index (`.ckx`), and a metadata map (`.ckm`).
+A dataset MAY additionally include a sampled posting index (`.cki`), a
+compact alternative search structure holding sampled, quantized hash
+postings designed to be queried at full resolution.
 
 ## 1. Introduction
 
@@ -42,8 +45,9 @@ flat-file representation optimized for:
 * append-only incremental updates; and
 * independent regeneration of derived structures.
 
-The `.ckd` file is the source of truth. The `.ckx` and `.ckm` files are derived
-artifacts and can be regenerated from `.ckd` and external metadata sources.
+The `.ckd` file is the source of truth. The `.ckx`, `.ckm`, and `.cki` files
+are derived artifacts and can be regenerated from `.ckd` and external metadata
+sources.
 
 ## 2. Conventions and Terminology
 
@@ -61,21 +65,23 @@ Unless otherwise specified:
 
 ## 3. Dataset Model
 
-A complete CKAF dataset consists of exactly three files sharing a common
-filename prefix:
+A complete CKAF dataset consists of three required files sharing a common
+filename prefix, plus one optional file:
 
 * `PREFIX.ckd` — data store;
-* `PREFIX.ckx` — search index; and
-* `PREFIX.ckm` — metadata map.
+* `PREFIX.ckx` — search index;
+* `PREFIX.ckm` — metadata map; and
+* `PREFIX.cki` — sampled posting index (OPTIONAL).
 
 Example:
 
 * `acoustid.ckd`
 * `acoustid.ckx`
 * `acoustid.ckm`
+* `acoustid.cki`
 
 Each file contains a `dataset_id` field. Implementations SHOULD treat matching
-`dataset_id` values as evidence that the three files were produced from the
+`dataset_id` values as evidence that the files were produced from the
 same logical dataset. A mismatch SHOULD generate a warning, but need not be a
 fatal error.
 
@@ -100,13 +106,14 @@ Each CKAF file begins with an 8-byte file-type magic value.
 | `.ckd` | `CKAF-D\x00\x00` | `43 4B 41 46 2D 44 00 00`         |
 | `.ckx` | `CKAF-X\x00\x00` | `43 4B 41 46 2D 58 00 00`         |
 | `.ckm` | `CKAF-M\x00\x00` | `43 4B 41 46 2D 4D 00 00`         |
+| `.cki` | `CKAF-I\x00\x00` | `43 4B 41 46 2D 49 00 00`         |
 
 Readers MUST reject a file whose magic value does not match the expected file
 type.
 
 ## 5. Common File Header
 
-All three CKAF file types begin with a 96-byte header. The header consists of a
+All CKAF file types begin with a 96-byte header. The header consists of a
 64-byte core header followed by a 32-byte section directory.
 
 ### 5.1. Core Header
@@ -160,6 +167,7 @@ The meaning of the two sections depends on the file type:
 | `.ckd` | Record Table       | Fingerprint Data Blob   |
 | `.ckx` | Bucket Directory   | Posting Lists           |
 | `.ckm` | Mapping Table      | String Pool             |
+| `.cki` | Skip Directory     | Posting Buckets         |
 
 A section length of zero indicates an empty section. This is valid for optional
 sections such as the `.ckm` string pool.
@@ -574,12 +582,253 @@ as a streaming merge. The result is written as a new `.ckx` file.
 Compaction MAY also be used to regenerate the index with different tuning
 parameters.
 
-## 8. The `.ckm` File
+## 8. The `.cki` File
+
+The `.cki` file stores a sampled posting index: an inverted index over
+sampled, quantized sub-fingerprint hashes. Compared to the `.ckx` band
+index, it trades band-based recall amplification for a much smaller
+posting volume, and recovers recall by evaluating queries at full
+resolution (Section 8.9). The `.cki` file is a derived artifact and MAY be
+used alongside or instead of `.ckx`.
+
+### 8.1. Layout
+
+```text
+[ Header (96 bytes) ]
+[ Tuning Configuration (64 bytes) ]
+[ Skip Directory ]          ; section 0
+[ Posting Buckets ]         ; section 1
+[ Overflow Index ]          ; optional, located via footer
+[ Footer (16 bytes) ]
+```
+
+The header `record_count` field holds the total number of postings in the
+main posting bucket section.
+
+### 8.2. Flags
+
+The `.cki` flags field is defined as follows:
+
+```text
+Bit 0: posting_compression
+       0 = varint delta buckets (Section 8.6)
+       1 = reserved
+
+Bit 1: has_overflow
+       0 = no overflow index
+       1 = overflow index present
+
+Bits 2-31: reserved, MUST be zero
+```
+
+Only `posting_compression = 0` is defined. Bit-packed posting containers
+were evaluated and rejected: at real bucket densities they are larger than
+the varint encoding.
+
+### 8.3. Tuning Configuration
+
+The 64-byte tuning configuration immediately follows the 96-byte common
+header.
+
+```text
+Offset  Size  Type    Field
+------  ----  ----    -----
+0x00    1     u8      stride
+0x01    1     u8      qbits
+0x02    4     u32     skip_interval
+0x06    4     u32     bucket_count
+0x0A    8     u64     total_postings
+0x12    4     u32     skip_entry_count
+0x16    1     u8      tuning_strategy
+0x17    41    u8[41]  reserved
+```
+
+Field constraints:
+
+* `stride` MUST be greater than or equal to 1.
+* `qbits` MUST be less than or equal to 24.
+* `skip_interval` MUST be greater than or equal to 1.
+* `skip_entry_count * 12` MUST equal `section_0_length`.
+* `reserved` MUST be zero.
+
+`tuning_strategy` uses the same informational values as `.ckx`
+(Section 7.3). The RECOMMENDED configuration, validated on the AcoustID
+corpus, is `stride = 8`, `qbits = 2`.
+
+### 8.4. Sampling and Quantization
+
+Postings are logical tuples:
+
+```text
+hash:           u32
+fingerprint_id: u32
+ordinal:        u8
+```
+
+Given a fingerprint's raw sub-fingerprint values, the builder emits one
+posting per sampled position:
+
+```text
+for i in 0, stride, 2*stride, ...:
+    ordinal = i / stride
+    if ordinal > 255: stop
+    hash = value[i] & ~((1 << qbits) - 1)
+```
+
+`ordinal` is the raw position divided by the stride. Positions whose
+ordinal would exceed 255 are not indexed; at `stride = 8` this covers the
+first 2048 raw positions (~4.5 minutes of audio), comfortably beyond
+typical capture windows.
+
+Dropping the low `qbits` bits of each hash merges buckets whose hashes
+differ only in their noisiest bits. On real data this reduces index size
+and improves recall simultaneously; false merges are filtered by
+exact-delta alignment during query processing (Section 8.9).
+
+### 8.5. Posting Buckets
+
+Postings are grouped into buckets by hash. Buckets are stored contiguously
+at `section_1_offset` in ascending hash order. Within a bucket, postings
+MUST be sorted by `fingerprint_id`, then by `ordinal`. Exact duplicate
+postings SHOULD be removed.
+
+### 8.6. Bucket Encoding
+
+Each bucket is encoded as:
+
+```text
+varint  hash_delta        ; hash minus previous bucket's hash (first: hash - 0)
+varint  posting_count     ; MUST be >= 1
+varint  first_fingerprint_id
+varint  fingerprint_id_delta   ; posting_count - 1 repetitions
+u8      ordinal                ; posting_count repetitions
+```
+
+Varints use unsigned LEB128, as elsewhere in CKAF. Repeated postings for
+the same fingerprint encode a `fingerprint_id_delta` of zero.
+
+### 8.7. Skip Directory
+
+The skip directory is located at `section_0_offset` and contains
+`skip_entry_count` fixed-width 12-byte entries, one for every
+`skip_interval`-th bucket, in ascending hash order:
+
+```text
+Offset  Size  Type    Field
+------  ----  ----    -----
+0x00    4     u32     hash
+0x04    8     u64     posting_offset
+```
+
+`hash` is the bucket's full (quantized) hash. `posting_offset` is the byte
+offset of the bucket's encoding relative to the start of section 1. The
+first bucket (index 0) always has a skip entry, so the first entry's
+`hash` is the smallest hash in the index.
+
+Because the `hash_delta` chain is not restarted at skip points, a reader
+beginning a scan at a skip entry MUST take the first bucket's hash from
+the skip entry itself (after consuming the encoded `hash_delta` varint),
+and accumulate deltas for subsequent buckets.
+
+### 8.8. Lookup Procedure
+
+To locate the bucket for a target hash, a reader:
+
+1. quantizes the target hash with the stored `qbits`;
+2. binary-searches the skip directory for the last entry whose `hash` is
+   less than or equal to the target (if none exists, the bucket is
+   absent);
+3. scans buckets sequentially from that entry's `posting_offset`,
+   stopping when the target hash is found, a bucket hash greater than the
+   target is decoded, or the next skip entry's offset (or the end of
+   section 1) is reached.
+
+### 8.9. Query Processing
+
+The `.cki` index is designed for full-resolution queries: although the
+index stores only every `stride`-th value, queries SHOULD look up every
+value of the query fingerprint. Querying with a sampled view of the query
+loses alignment phase information and substantially reduces recall.
+
+For a query fingerprint `q[0..n)`:
+
+1. For each raw position `p`, quantize `q[p]` and look up its bucket
+   (main and overflow regions).
+2. For each posting `(fingerprint_id, ordinal)` in the bucket, cast a vote
+   for the pair `(fingerprint_id, delta)` where
+   `delta = ordinal * stride - p`.
+3. A candidate's score is its highest vote count over any single `delta`
+   (exact-delta alignment).
+4. Discard candidates whose score is below a minimum hit threshold
+   (RECOMMENDED default: 3).
+5. Rank candidates by score descending, breaking ties by absolute `delta`
+   ascending, and return the top K.
+
+Candidates MAY additionally be verified by bit-error comparison against
+the full fingerprint in `.ckd`, using `delta` as the alignment hint, as in
+Section 10.1.5.
+
+### 8.10. Overflow Index
+
+The `.cki` overflow index is append-only and located via the footer.
+
+#### 8.10.1. Layout
+
+```text
+[ Overflow Header (16 bytes) ]
+[ Overflow Skip Directory ]
+[ Overflow Posting Buckets ]
+```
+
+Overflow header format:
+
+```text
+Offset  Size  Type    Field
+------  ----  ----    -----
+0x00    8     u8[8]   overflow_magic
+0x08    4     u32     overflow_posting_count
+0x0C    4     u32     overflow_skip_entry_count
+```
+
+`overflow_magic` MUST equal `CKAF-IO\x00`
+(`43 4B 41 46 2D 49 4F 00`).
+
+The overflow skip directory and posting buckets use the same encoding as
+the main sections, with skip `posting_offset` values relative to the start
+of the overflow posting buckets. The overflow region MUST be built with
+the same `stride`, `qbits`, and `skip_interval` as the main index.
+
+#### 8.10.2. Query Semantics
+
+During query processing, readers MUST consult both the main and overflow
+regions for each addressed hash, and accumulate votes across both.
+
+### 8.11. Footer
+
+The final 16 bytes of a `.cki` file are:
+
+```text
+Offset  Size  Type    Field
+------  ----  ----    -----
+0x00    8     u64     overflow_offset
+0x08    8     u8[8]   footer_magic
+```
+
+`footer_magic` MUST equal `CKAF-IF\x00`
+(`43 4B 41 46 2D 49 46 00`).
+
+### 8.12. Compaction
+
+Compaction regenerates the `.cki` file from the compacted `.ckd`,
+preserving the tuning configuration, and produces a file with no overflow
+region. The new file SHOULD replace the old file atomically.
+
+## 9. The `.ckm` File
 
 The `.ckm` file maps fingerprint IDs to MusicBrainz identifiers and optional
 text metadata.
 
-### 8.1. Layout
+### 9.1. Layout
 
 ```text
 [ Header (96 bytes) ]
@@ -589,7 +838,7 @@ text metadata.
 [ Footer (16 bytes) ]
 ```
 
-### 8.2. Flags
+### 9.2. Flags
 
 The `.ckm` flags field is defined as follows:
 
@@ -605,7 +854,7 @@ Bit 1: has_overflow
 Bits 2-31: reserved, MUST be zero
 ```
 
-### 8.3. Mapping Table
+### 9.3. Mapping Table
 
 The mapping table is located at `section_0_offset` and contains fixed-width
 32-byte records sorted by `fingerprint_id`.
@@ -630,7 +879,7 @@ Field definitions:
 
 Only mapped fingerprints appear in the `.ckm` table.
 
-### 8.4. String Pool
+### 9.4. String Pool
 
 The string pool is located at `section_1_offset`. It consists of UTF-8 encoded
 key-value blocks of the form:
@@ -653,7 +902,7 @@ The following keys are defined:
 
 If `has_text_metadata = 0`, section 1 MAY be empty.
 
-### 8.5. Overflow Mappings
+### 9.5. Overflow Mappings
 
 The `.ckm` overflow region is append-only and has the following layout:
 
@@ -683,7 +932,7 @@ pool, not the main string pool.
 If a `fingerprint_id` exists in both main and overflow mapping tables, the
 overflow record MUST supersede the main record.
 
-### 8.6. Footer
+### 9.6. Footer
 
 The final 16 bytes of a `.ckm` file are:
 
@@ -697,36 +946,41 @@ Offset  Size  Type    Field
 `footer_magic` MUST equal `CKAF-MF\x00`
 (`43 4B 41 46 2D 4D 46 00`).
 
-### 8.7. Compaction
+### 9.7. Compaction
 
 Compaction merges overflow mappings into the main mapping table, rewrites string
 pool offsets as needed, and produces a new `.ckm` file. The new file SHOULD
 replace the old file atomically.
 
-## 9. Query Processing
+## 10. Query Processing
 
-### 9.1. Similarity Lookup
+### 10.1. Similarity Lookup
+
+This section describes lookup through the `.ckx` band index. Full-resolution
+lookup through the `.cki` sampled posting index is described in Section 8.9;
+its candidates MAY feed the same detailed comparison (Section 10.1.5) and
+metadata resolution (Section 10.1.7) stages.
 
 Given a query fingerprint consisting of an array of `u32` sub-fingerprints and
 an associated duration, a reader or server performs the following operations.
 
-#### 9.1.1. Band Extraction
+#### 10.1.1. Band Extraction
 
 Read the tuning configuration from `.ckx`. For each query sub-fingerprint,
 extract `num_bands` band values.
 
-#### 9.1.2. Bucket Lookup
+#### 10.1.2. Bucket Lookup
 
 For each `(band_index, band_value)` pair, compute the bucket index and resolve
 its posting list from the bucket directory.
 
-#### 9.1.3. Candidate Collection
+#### 10.1.3. Candidate Collection
 
 Read the corresponding posting lists from main and overflow index regions, if
 present. Collect `(fingerprint_id, position)` pairs and count the number of
 occurrences per `fingerprint_id`.
 
-#### 9.1.4. Threshold Filtering
+#### 10.1.4. Threshold Filtering
 
 A recommended adaptive threshold is:
 
@@ -736,7 +990,7 @@ min_matches = max(3, query_raw_count * num_bands * 0.02)
 
 Candidates with fewer matches MAY be discarded before detailed comparison.
 
-#### 9.1.5. Detailed Comparison
+#### 10.1.5. Detailed Comparison
 
 For each remaining candidate:
 
@@ -745,7 +999,7 @@ For each remaining candidate:
 3. align query and candidate using posting-list position hints; and
 4. compute bit error rate over the aligned overlap window.
 
-#### 9.1.6. Ranking
+#### 10.1.6. Ranking
 
 A recommended interpretation of bit error rate is:
 
@@ -756,14 +1010,14 @@ A recommended interpretation of bit error rate is:
 These thresholds are implementation guidance and are not part of the binary
 format.
 
-#### 9.1.7. Metadata Resolution
+#### 10.1.7. Metadata Resolution
 
 Matched `fingerprint_id` values MAY be resolved through `.ckm` using binary
 search over main and overflow mapping tables.
 
-## 10. Import and Update Procedures
+## 11. Import and Update Procedures
 
-### 10.1. Full Build
+### 11.1. Full Build
 
 A full build from source data SHOULD proceed as follows:
 
@@ -772,14 +1026,16 @@ A full build from source data SHOULD proceed as follows:
    and data blob;
 3. build `.ckx` by selecting tuning parameters, extracting bucket assignments,
    and writing posting lists and bucket directory;
-4. build `.ckm` by writing mapping records and optional string-pool data; and
-5. write a common `dataset_id` to all three file headers.
+4. build `.ckm` by writing mapping records and optional string-pool data;
+5. optionally build `.cki` by sampling and quantizing fingerprints and
+   writing posting buckets and the skip directory; and
+6. write a common `dataset_id` to all file headers.
 
-### 10.2. Incremental Update
+### 11.2. Incremental Update
 
 An incremental update appends overflow regions only.
 
-For `.ckd`, `.ckx`, and `.ckm`, implementations SHOULD:
+For `.ckd`, `.ckx`, `.ckm`, and `.cki`, implementations SHOULD:
 
 1. build the overflow structure in sorted form;
 2. append the overflow region after section 1;
@@ -788,12 +1044,12 @@ For `.ckd`, `.ckx`, and `.ckm`, implementations SHOULD:
 If the process fails during append, existing main sections remain valid.
 Readers SHOULD detect incomplete or corrupt overflow regions and discard them.
 
-### 10.3. Compaction Thresholds
+### 11.3. Compaction Thresholds
 
 Implementations SHOULD compact when overflow size exceeds approximately 5–10%
 of the corresponding main record count, or according to an operational schedule.
 
-## 11. Versioning and Compatibility
+## 12. Versioning and Compatibility
 
 The following compatibility rules apply:
 
@@ -806,7 +1062,7 @@ The following compatibility rules apply:
   loading; and
 * overflow magic values MUST be validated before an overflow region is used.
 
-## 12. Security and Robustness Considerations
+## 13. Security and Robustness Considerations
 
 Readers MUST treat all on-disk offsets and lengths as untrusted input.
 Implementations SHOULD validate, at minimum:
@@ -834,9 +1090,15 @@ For a full dataset on the order of 90 million fingerprints:
 | `.ckd` fingerprint data  | 90M       | ~1.2–1.5 KB | ~11–14 GB    |
 | `.ckx` bucket directory  | 1K–32K    | 12 B        | ~12–384 KB   |
 | `.ckx` posting lists     | billions  | compressed  | ~30–60 GB    |
+| `.cki` posting buckets   | ~10.5B    | ~6 B        | ~60 GB       |
 | `.ckm` mapping table     | 20.5M     | 32 B        | ~656 MB      |
 | `.ckm` string pool       | 20.5M     | ~80 B avg   | ~1.6 GB      |
 | **Total**                |           |             | **~45–78 GB** |
+
+The `.cki` figure assumes `stride = 8`, `qbits = 2`, and an average of
+~113 sampled postings per fingerprint; measured cost on AcoustID data is
+approximately 6 bytes per posting. Deployments typically choose either
+`.ckx` or `.cki` as the primary search structure rather than both.
 
 These figures are illustrative and depend on corpus characteristics and chosen
 compression settings.

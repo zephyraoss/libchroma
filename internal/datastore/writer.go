@@ -1,6 +1,7 @@
 package datastore
 
 import (
+	"bufio"
 	"encoding/binary"
 	"fmt"
 	"os"
@@ -12,8 +13,6 @@ import (
 	"github.com/zephyraoss/libchroma/internal/wire"
 )
 
-// Builder constructs a .ckd file by accumulating fingerprint records
-// and writing them in sorted order.
 type Builder struct {
 	f           *os.File
 	path        string
@@ -21,6 +20,15 @@ type Builder struct {
 	datasetID   uuid.UUID
 	sourceDate  uint64
 	records     []buildRecord
+
+	spool        *os.File
+	spoolW       *bufio.Writer
+	spoolOffset  uint64
+	spillRecords []spillRecord
+}
+
+type BuilderOptions struct {
+	SpillDir string
 }
 
 type buildRecord struct {
@@ -30,30 +38,55 @@ type buildRecord struct {
 	rawCount      uint16
 }
 
-// NewBuilder creates a new Builder that writes to the given path.
+type spillRecord struct {
+	fingerprintID uint32
+	durationMs    uint32
+	spoolOffset   uint64
+	length        uint16
+	rawCount      uint16
+}
+
+type recordMeta struct {
+	fingerprintID uint32
+	durationMs    uint32
+	length        uint16
+	rawCount      uint16
+}
+
 func NewBuilder(path string, compression cktype.CompressionMethod) (*Builder, error) {
+	return NewBuilderWithOptions(path, compression, BuilderOptions{})
+}
+
+func NewBuilderWithOptions(path string, compression cktype.CompressionMethod, opts BuilderOptions) (*Builder, error) {
 	f, err := os.Create(path)
 	if err != nil {
 		return nil, err
 	}
-	return &Builder{
+	b := &Builder{
 		f:           f,
 		path:        path,
 		compression: compression,
-	}, nil
+	}
+	if opts.SpillDir != "" {
+		spool, err := os.CreateTemp(opts.SpillDir, "ckd-spool-*.tmp")
+		if err != nil {
+			f.Close()
+			return nil, fmt.Errorf("creating spool file: %w", err)
+		}
+		b.spool = spool
+		b.spoolW = bufio.NewWriterSize(spool, 1<<20)
+	}
+	return b, nil
 }
 
-// SetSourceDate sets the source_date header field.
 func (b *Builder) SetSourceDate(t uint64) {
 	b.sourceDate = t
 }
 
-// SetDatasetID sets the dataset_id header field.
 func (b *Builder) SetDatasetID(id uuid.UUID) {
 	b.datasetID = id
 }
 
-// Add compresses the fingerprint values and stores the record for later writing.
 func (b *Builder) Add(fingerprintID uint32, durationMs uint32, values []uint32) error {
 	if len(values) > 0xFFFF {
 		return fmt.Errorf("ckaf: fingerprint %d has %d sub-fingerprints, exceeds u16 max (65535)", fingerprintID, len(values))
@@ -64,6 +97,20 @@ func (b *Builder) Add(fingerprintID uint32, durationMs uint32, values []uint32) 
 	}
 	if len(compressed) > 0xFFFF {
 		return fmt.Errorf("ckaf: fingerprint %d compressed to %d bytes, exceeds u16 max (65535)", fingerprintID, len(compressed))
+	}
+	if b.spool != nil {
+		if _, err := b.spoolW.Write(compressed); err != nil {
+			return fmt.Errorf("writing spool file: %w", err)
+		}
+		b.spillRecords = append(b.spillRecords, spillRecord{
+			fingerprintID: fingerprintID,
+			durationMs:    durationMs,
+			spoolOffset:   b.spoolOffset,
+			length:        uint16(len(compressed)),
+			rawCount:      uint16(len(values)),
+		})
+		b.spoolOffset += uint64(len(compressed))
+		return nil
 	}
 	b.records = append(b.records, buildRecord{
 		fingerprintID: fingerprintID,
@@ -83,41 +130,82 @@ func (b *Builder) compress(values []uint32) ([]byte, error) {
 	}
 }
 
-// Finish sorts records, writes all sections, and closes the file.
 func (b *Builder) Finish() error {
 	defer b.f.Close()
 
-	sort.Slice(b.records, func(i, j int) bool {
+	if b.spool != nil {
+		defer b.removeSpool()
+		if err := b.spoolW.Flush(); err != nil {
+			return fmt.Errorf("flushing spool file: %w", err)
+		}
+		sort.SliceStable(b.spillRecords, func(i, j int) bool {
+			return b.spillRecords[i].fingerprintID < b.spillRecords[j].fingerprintID
+		})
+		payloadBuf := make([]byte, 0xFFFF)
+		return b.writeFile(len(b.spillRecords),
+			func(i int) recordMeta {
+				r := b.spillRecords[i]
+				return recordMeta{r.fingerprintID, r.durationMs, r.length, r.rawCount}
+			},
+			func(i int) ([]byte, error) {
+				r := b.spillRecords[i]
+				buf := payloadBuf[:r.length]
+				if _, err := b.spool.ReadAt(buf, int64(r.spoolOffset)); err != nil {
+					return nil, fmt.Errorf("reading spool file: %w", err)
+				}
+				return buf, nil
+			})
+	}
+
+	sort.SliceStable(b.records, func(i, j int) bool {
 		return b.records[i].fingerprintID < b.records[j].fingerprintID
 	})
+	return b.writeFile(len(b.records),
+		func(i int) recordMeta {
+			r := b.records[i]
+			return recordMeta{r.fingerprintID, r.durationMs, uint16(len(r.compressed)), r.rawCount}
+		},
+		func(i int) ([]byte, error) {
+			return b.records[i].compressed, nil
+		})
+}
+
+func (b *Builder) removeSpool() {
+	b.spool.Close()
+	os.Remove(b.spool.Name())
+}
+
+func (b *Builder) writeFile(count int, meta func(int) recordMeta, payload func(int) ([]byte, error)) error {
+	w := bufio.NewWriterSize(b.f, 1<<20)
 
 	var placeholder [wire.HeaderSize]byte
-	if _, err := b.f.Write(placeholder[:]); err != nil {
+	if _, err := w.Write(placeholder[:]); err != nil {
 		return err
 	}
 
 	section0Offset := uint64(wire.HeaderSize)
 	var dataOffset uint64
-	for _, rec := range b.records {
+	for i := 0; i < count; i++ {
+		rec := meta(i)
 		var buf [RecordSize]byte
 		binary.LittleEndian.PutUint32(buf[0:4], rec.fingerprintID)
 		binary.LittleEndian.PutUint32(buf[4:8], uint32(dataOffset&0xFFFFFFFF))
 		buf[8] = byte(dataOffset >> 32)
 		buf[9] = byte(dataOffset >> 40)
-		binary.LittleEndian.PutUint16(buf[10:12], uint16(len(rec.compressed)))
+		binary.LittleEndian.PutUint16(buf[10:12], rec.length)
 		binary.LittleEndian.PutUint32(buf[12:16], rec.durationMs)
 		binary.LittleEndian.PutUint16(buf[16:18], rec.rawCount)
-		if _, err := b.f.Write(buf[:]); err != nil {
+		if _, err := w.Write(buf[:]); err != nil {
 			return err
 		}
-		dataOffset += uint64(len(rec.compressed))
+		dataOffset += uint64(rec.length)
 	}
-	section0Length := uint64(len(b.records)) * RecordSize
+	section0Length := uint64(count) * RecordSize
 
 	pos := section0Offset + section0Length
 	if pad := pos % 8; pad != 0 {
 		padding := make([]byte, 8-pad)
-		if _, err := b.f.Write(padding); err != nil {
+		if _, err := w.Write(padding); err != nil {
 			return err
 		}
 		pos += 8 - pad
@@ -125,11 +213,18 @@ func (b *Builder) Finish() error {
 
 	section1Offset := pos
 	var section1Length uint64
-	for _, rec := range b.records {
-		if _, err := b.f.Write(rec.compressed); err != nil {
+	for i := 0; i < count; i++ {
+		p, err := payload(i)
+		if err != nil {
 			return err
 		}
-		section1Length += uint64(len(rec.compressed))
+		if _, err := w.Write(p); err != nil {
+			return err
+		}
+		section1Length += uint64(len(p))
+	}
+	if err := w.Flush(); err != nil {
+		return err
 	}
 
 	footerOffset := int64(section1Offset + section1Length)
@@ -151,7 +246,7 @@ func (b *Builder) Finish() error {
 		VersionMajor:   wire.CurrentVersionMajor,
 		VersionMinor:   wire.CurrentVersionMinor,
 		Flags:          flags,
-		RecordCount:    uint64(len(b.records)),
+		RecordCount:    uint64(count),
 		CreatedAt:      uint64(time.Now().Unix()),
 		SourceDate:     b.sourceDate,
 		DatasetID:      b.datasetID,

@@ -14,7 +14,6 @@ import (
 	"github.com/zephyraoss/libchroma/internal/wire"
 )
 
-// Builder constructs a .ckx file.
 type Builder struct {
 	f           *os.File
 	path        string
@@ -23,7 +22,6 @@ type Builder struct {
 	tuning      cktype.TuningConfig
 }
 
-// NewBuilder creates a new builder that writes a .ckx file at path.
 func NewBuilder(path string, compression cktype.CompressionMethod) (*Builder, error) {
 	f, err := os.CreateTemp(filepath.Dir(path), "ckx-build-*.tmp")
 	if err != nil {
@@ -36,17 +34,14 @@ func NewBuilder(path string, compression cktype.CompressionMethod) (*Builder, er
 	}, nil
 }
 
-// SetTuningConfig sets the tuning configuration for the index.
 func (b *Builder) SetTuningConfig(config cktype.TuningConfig) {
 	b.tuning = config
 }
 
-// SetDatasetID sets the dataset UUID written to the file header.
 func (b *Builder) SetDatasetID(id uuid.UUID) {
 	b.datasetID = id
 }
 
-// AutoTune sets a default tuning configuration.
 func (b *Builder) AutoTune(ds *datastore.DataStore, strategy cktype.TuningStrategy, availableRAM, storageBudget uint64) error {
 	b.tuning = cktype.TuningConfig{
 		NumBands:       4,
@@ -73,8 +68,6 @@ func (b *Builder) validateTuning() error {
 	return nil
 }
 
-// BuildFrom iterates all records in the datastore, decompresses fingerprints,
-// extracts band values, and builds posting lists for each bucket.
 func (b *Builder) BuildFrom(ds *datastore.DataStore) error {
 	if err := b.validateTuning(); err != nil {
 		return err
@@ -267,7 +260,6 @@ func (b *Builder) writeTuningConfig() error {
 	return nil
 }
 
-// Finish closes the temp file and renames it to the final path.
 func (b *Builder) Finish() error {
 	tmpPath := b.f.Name()
 	if err := b.f.Close(); err != nil {

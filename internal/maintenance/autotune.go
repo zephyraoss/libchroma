@@ -2,7 +2,6 @@ package maintenance
 
 import "github.com/zephyraoss/libchroma/internal/cktype"
 
-// AutoTuneParams selects LSH parameters based on dataset size and constraints.
 func AutoTuneParams(recordCount uint64, strategy cktype.TuningStrategy, availableRAM, storageBudget uint64) cktype.TuningConfig {
 	type candidate struct {
 		bands   uint8

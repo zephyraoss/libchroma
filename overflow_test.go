@@ -1,6 +1,7 @@
 package chroma
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -320,6 +321,221 @@ func TestOverflowMetadataRoundTrip(t *testing.T) {
 		if meta.Title != "Original" {
 			t.Errorf("main metadata Title: got %q, want %q", meta.Title, "Original")
 		}
+	}
+
+	for _, want := range overflowMeta {
+		rec, err := mm.Lookup(want.FingerprintID)
+		if err != nil {
+			t.Fatalf("Lookup overflow metadata %d: %v", want.FingerprintID, err)
+		}
+		if !rec.FromOverflow {
+			t.Errorf("overflow record %d not marked FromOverflow", want.FingerprintID)
+		}
+		if rec.MBID != want.MBID || rec.TrackID != want.TrackID {
+			t.Errorf("overflow mapping %d: got (%s, %d), want (%s, %d)", want.FingerprintID, rec.MBID, rec.TrackID, want.MBID, want.TrackID)
+		}
+		meta, err := mm.ReadMetadata(rec)
+		if err != nil {
+			t.Fatalf("ReadMetadata overflow %d: %v", want.FingerprintID, err)
+		}
+		if meta == nil || meta.Title != want.Metadata.Title {
+			t.Errorf("overflow metadata %d: got %+v, want title %q", want.FingerprintID, meta, want.Metadata.Title)
+		}
+	}
+
+	seen := map[uint32]bool{}
+	if err := mm.IterateMappings(func(rec *MappingRecord) error {
+		seen[rec.FingerprintID] = true
+		return nil
+	}); err != nil {
+		t.Fatalf("IterateMappings: %v", err)
+	}
+	if want := len(initialFPs) + len(overflowMeta); len(seen) != want {
+		t.Errorf("IterateMappings visited %d records, want %d", len(seen), want)
+	}
+}
+
+func TestOverflowMetadataShadowsMainRecord(t *testing.T) {
+	dir := t.TempDir()
+	const fpCount = 30
+
+	initialFPs := make([]struct {
+		id     uint32
+		dur    uint32
+		values []uint32
+		meta   *TrackMetadata
+	}, 3)
+	for i := range initialFPs {
+		id, dur, vals := generateTestFingerprint(uint32(i+1)*10, fpCount)
+		initialFPs[i].id = id
+		initialFPs[i].dur = dur
+		initialFPs[i].values = vals
+		initialFPs[i].meta = &TrackMetadata{Title: "Original"}
+	}
+
+	prefix, _ := buildOverflowTestDataset(t, dir, initialFPs)
+	metaPath := prefix + ".ckm"
+
+	newMBID := uuid.New()
+	if err := AppendMetadataOverflow(metaPath, []OverflowMappingRecord{
+		{FingerprintID: initialFPs[0].id, MBID: newMBID, TrackID: 777},
+	}); err != nil {
+		t.Fatalf("AppendMetadataOverflow: %v", err)
+	}
+
+	mm, err := OpenMetadataMap(metaPath)
+	if err != nil {
+		t.Fatalf("OpenMetadataMap: %v", err)
+	}
+	defer mm.Close()
+
+	rec, err := mm.Lookup(initialFPs[0].id)
+	if err != nil {
+		t.Fatalf("Lookup: %v", err)
+	}
+	if !rec.FromOverflow || rec.MBID != newMBID || rec.TrackID != 777 {
+		t.Errorf("overflow must shadow main: got (overflow=%t, %s, %d)", rec.FromOverflow, rec.MBID, rec.TrackID)
+	}
+
+	visits := 0
+	if err := mm.IterateMappings(func(r *MappingRecord) error {
+		if r.FingerprintID == initialFPs[0].id {
+			visits++
+			if !r.FromOverflow {
+				t.Error("IterateMappings yielded the shadowed main record")
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("IterateMappings: %v", err)
+	}
+	if visits != 1 {
+		t.Errorf("shadowed fingerprint visited %d times, want 1", visits)
+	}
+}
+
+func TestOverflowDataStorePFORRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	dsPath := filepath.Join(dir, "pfor.ckd")
+
+	db, err := NewDataStoreBuilder(dsPath, CompressPFOR)
+	if err != nil {
+		t.Fatalf("NewDataStoreBuilder: %v", err)
+	}
+	db.SetDatasetID(uuid.New())
+	id, dur, vals := generateTestFingerprint(10, 30)
+	if err := db.Add(id, dur, vals); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	if err := db.Finish(); err != nil {
+		t.Fatalf("Finish: %v", err)
+	}
+
+	oid, odur, ovals := generateTestFingerprint(500, 40)
+	if err := AppendDataStoreOverflow(dsPath, []OverflowRecord{
+		{FingerprintID: oid, DurationMs: odur, Values: ovals},
+	}); err != nil {
+		t.Fatalf("AppendDataStoreOverflow: %v", err)
+	}
+
+	ds, err := OpenDataStore(dsPath)
+	if err != nil {
+		t.Fatalf("OpenDataStore: %v", err)
+	}
+	defer ds.Close()
+
+	rec, err := ds.Lookup(oid)
+	if err != nil {
+		t.Fatalf("Lookup overflow: %v", err)
+	}
+	fp, err := ds.ReadFingerprint(rec)
+	if err != nil {
+		t.Fatalf("ReadFingerprint overflow (PFOR): %v", err)
+	}
+	if len(fp.Values) != len(ovals) {
+		t.Fatalf("values length: got %d, want %d", len(fp.Values), len(ovals))
+	}
+	for i, v := range ovals {
+		if fp.Values[i] != v {
+			t.Fatalf("PFOR overflow value[%d]: got %d, want %d", i, fp.Values[i], v)
+		}
+	}
+}
+
+func TestTruncateOverflowRestoresBaseFile(t *testing.T) {
+	dir := t.TempDir()
+	const fpCount = 30
+
+	initialFPs := make([]struct {
+		id     uint32
+		dur    uint32
+		values []uint32
+		meta   *TrackMetadata
+	}, 4)
+	for i := range initialFPs {
+		id, dur, vals := generateTestFingerprint(uint32(i+1)*10, fpCount)
+		initialFPs[i].id = id
+		initialFPs[i].dur = dur
+		initialFPs[i].values = vals
+		initialFPs[i].meta = &TrackMetadata{Title: "Initial"}
+	}
+
+	prefix, _ := buildOverflowTestDataset(t, dir, initialFPs)
+	dsPath := prefix + ".ckd"
+
+	baseInfo, err := os.Stat(dsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseSize := baseInfo.Size()
+
+	appendOne := func(seed uint32) OverflowRecord {
+		id, dur, vals := generateTestFingerprint(seed, fpCount)
+		rec := OverflowRecord{FingerprintID: id, DurationMs: dur, Values: vals}
+		if err := AppendDataStoreOverflow(dsPath, []OverflowRecord{rec}); err != nil {
+			t.Fatalf("AppendDataStoreOverflow: %v", err)
+		}
+		return rec
+	}
+	first := appendOne(1000)
+
+	if err := TruncateOverflow(dsPath, baseSize); err != nil {
+		t.Fatalf("TruncateOverflow: %v", err)
+	}
+	info, err := os.Stat(dsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Size() != baseSize {
+		t.Fatalf("file size after truncate: got %d, want %d", info.Size(), baseSize)
+	}
+
+	ds, err := OpenDataStore(dsPath)
+	if err != nil {
+		t.Fatalf("OpenDataStore after truncate: %v", err)
+	}
+	if ds.HasOvfl {
+		t.Error("expected no overflow after truncate")
+	}
+	if _, err := ds.Lookup(first.FingerprintID); err == nil {
+		t.Error("truncated overflow fingerprint still resolvable")
+	}
+	if _, err := ds.Lookup(initialFPs[0].id); err != nil {
+		t.Errorf("main fingerprint lost after truncate: %v", err)
+	}
+	ds.Close()
+
+	second := appendOne(2000)
+	ds, err = OpenDataStore(dsPath)
+	if err != nil {
+		t.Fatalf("OpenDataStore after re-append: %v", err)
+	}
+	defer ds.Close()
+	if ds.OverflowCount != 1 {
+		t.Errorf("OverflowCount after re-append: got %d, want 1", ds.OverflowCount)
+	}
+	if _, err := ds.Lookup(second.FingerprintID); err != nil {
+		t.Errorf("re-appended overflow fingerprint missing: %v", err)
 	}
 }
 

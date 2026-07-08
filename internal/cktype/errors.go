@@ -14,4 +14,7 @@ var (
 	ErrEmptyDataset       = errors.New("ckaf: dataset contains no records")
 	ErrInvalidCompression = errors.New("ckaf: invalid compressed data")
 	ErrTruncatedVarint    = errors.New("ckaf: truncated varint encoding")
+	ErrNoPostingIndex     = errors.New("ckaf: dataset has no sampled posting index (.cki)")
+	ErrNoSearchIndex      = errors.New("ckaf: dataset has no search index (.ckx)")
+	ErrNoIndex            = errors.New("ckaf: dataset has no search index (.ckx) or posting index (.cki)")
 )

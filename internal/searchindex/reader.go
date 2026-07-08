@@ -19,7 +19,6 @@ const (
 
 var overflowMagicCKX = [8]byte{'C', 'K', 'A', 'F', '-', 'X', 'O', 0}
 
-// SearchIndex provides read access to a .ckx file via memory-mapping.
 type SearchIndex struct {
 	F                    *os.File
 	Mmap                 *mmap.Data
@@ -33,7 +32,6 @@ type SearchIndex struct {
 	OverflowPostingStart int64
 }
 
-// Open opens and validates a .ckx file for reading.
 func Open(path string) (*SearchIndex, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -165,7 +163,6 @@ func (idx *SearchIndex) readOverflowHeader() error {
 	return nil
 }
 
-// Close releases resources associated with the search index.
 func (idx *SearchIndex) Close() error {
 	if err := mmap.Unmap(idx.Mmap); err != nil {
 		idx.F.Close()
@@ -174,7 +171,6 @@ func (idx *SearchIndex) Close() error {
 	return idx.F.Close()
 }
 
-// ExtractBands returns num_bands band values extracted from a sub-fingerprint.
 func (idx *SearchIndex) ExtractBands(subFingerprint uint32) []uint32 {
 	bands := make([]uint32, idx.Tuning.NumBands)
 	mask := uint32((1 << idx.Tuning.BitsPerBand) - 1)
@@ -184,7 +180,6 @@ func (idx *SearchIndex) ExtractBands(subFingerprint uint32) []uint32 {
 	return bands
 }
 
-// Search collects all posting entries for the given fingerprint's sub-fingerprints.
 func (idx *SearchIndex) Search(fingerprint []uint32) ([]cktype.PostingEntry, error) {
 	var results []cktype.PostingEntry
 	for _, subFP := range fingerprint {
@@ -210,7 +205,6 @@ func (idx *SearchIndex) Search(fingerprint []uint32) ([]cktype.PostingEntry, err
 	return results, nil
 }
 
-// ReadPostingList reads the posting list for a bucket from the main index.
 func (idx *SearchIndex) ReadPostingList(bucketIndex uint32) ([]cktype.PostingEntry, error) {
 	return idx.readPostingListFrom(
 		int64(idx.Header.Section0Offset),
@@ -219,7 +213,6 @@ func (idx *SearchIndex) ReadPostingList(bucketIndex uint32) ([]cktype.PostingEnt
 	)
 }
 
-// ReadOverflowPostingList reads the posting list for a bucket from the overflow index.
 func (idx *SearchIndex) ReadOverflowPostingList(bucketIndex uint32) ([]cktype.PostingEntry, error) {
 	return idx.readPostingListFrom(
 		idx.OverflowBucketStart,
@@ -302,8 +295,6 @@ func (idx *SearchIndex) readPostingListVarint(absOffset int64, postingCount uint
 }
 
 func (idx *SearchIndex) readPostingListPFOR(absOffset int64, count int) ([]cktype.PostingEntry, error) {
-	// Upper bound: 4 (first ID) + ceil(count/128) blocks * (2 + 16*32 + 128*5) + count*2 positions
-	// Simplified: use remaining file data as upper bound.
 	remaining := int64(idx.Mmap.Len()) - absOffset
 	if remaining <= 0 {
 		return nil, fmt.Errorf("%w: posting list offset", cktype.ErrOffsetOutOfBounds)

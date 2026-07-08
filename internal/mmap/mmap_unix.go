@@ -8,7 +8,6 @@ import (
 	"syscall"
 )
 
-// MapFile memory-maps the entire file read-only.
 func MapFile(f *os.File) (*Data, error) {
 	fi, err := f.Stat()
 	if err != nil {
@@ -25,10 +24,11 @@ func MapFile(f *os.File) (*Data, error) {
 	return &Data{Bytes: data}, nil
 }
 
-// Unmap unmaps the memory region.
 func Unmap(m *Data) error {
 	if m.Bytes == nil {
 		return nil
 	}
-	return syscall.Munmap(m.Bytes)
+	bytes := m.Bytes
+	m.Bytes = nil
+	return syscall.Munmap(bytes)
 }
