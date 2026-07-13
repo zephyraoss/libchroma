@@ -17,4 +17,5 @@ var (
 	ErrNoPostingIndex     = cktype.ErrNoPostingIndex
 	ErrNoSearchIndex      = cktype.ErrNoSearchIndex
 	ErrNoIndex            = cktype.ErrNoIndex
+	ErrNoDataStore        = cktype.ErrNoDataStore
 )

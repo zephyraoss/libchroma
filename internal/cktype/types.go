@@ -153,6 +153,7 @@ type DatasetStats struct {
 	TuningConfig       TuningConfig
 	HasPostingIndex    bool
 	PostingIndexTuning TuningConfig
+	HasDataStore       bool
 }
 
 type OverflowRecord struct {

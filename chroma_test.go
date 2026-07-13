@@ -397,3 +397,94 @@ func TestCompactDatasetNoSearchIndex(t *testing.T) {
 		}
 	}
 }
+
+func TestDatasetOpenWithoutDataStore(t *testing.T) {
+	dir := t.TempDir()
+	prefix := filepath.Join(dir, "serving")
+	datasetID := uuid.New()
+
+	db, err := NewDataStoreBuilder(prefix+".ckd", CompressVarint)
+	if err != nil {
+		t.Fatalf("NewDataStoreBuilder: %v", err)
+	}
+	db.SetDatasetID(datasetID)
+	var queryValues []uint32
+	var queryID uint32
+	for i := 0; i < 10; i++ {
+		id, dur, vals := generateTestFingerprint(uint32(i+1), 64)
+		if i == 3 {
+			queryValues, queryID = vals, id
+		}
+		if err := db.Add(id, dur, vals); err != nil {
+			t.Fatalf("Add: %v", err)
+		}
+	}
+	if err := db.Finish(); err != nil {
+		t.Fatalf("Finish datastore: %v", err)
+	}
+
+	ds, err := OpenDataStore(prefix + ".ckd")
+	if err != nil {
+		t.Fatalf("OpenDataStore: %v", err)
+	}
+	pb, err := NewPostingIndexBuilder(prefix + ".cki")
+	if err != nil {
+		t.Fatalf("NewPostingIndexBuilder: %v", err)
+	}
+	pb.SetDatasetID(datasetID)
+	pb.SetTuningConfig(TuningConfig{Stride: 8, QBits: 2, SkipInterval: 64, Strategy: TuneBalanced})
+	if err := pb.BuildFrom(ds); err != nil {
+		t.Fatalf("BuildFrom: %v", err)
+	}
+	if err := pb.Finish(); err != nil {
+		t.Fatalf("Finish posting index: %v", err)
+	}
+
+	mb, err := NewMetadataMapBuilder(prefix+".ckm", false)
+	if err != nil {
+		t.Fatalf("NewMetadataMapBuilder: %v", err)
+	}
+	mb.SetDatasetID(datasetID)
+	for i := 0; i < 10; i++ {
+		if err := mb.Add(uint32(i+1), uuid.New(), uint32(i+1), nil); err != nil {
+			t.Fatalf("Add metadata: %v", err)
+		}
+	}
+	if err := mb.Finish(); err != nil {
+		t.Fatalf("Finish metadata: %v", err)
+	}
+	ds.Close()
+
+	if err := os.Remove(prefix + ".ckd"); err != nil {
+		t.Fatalf("Remove ckd: %v", err)
+	}
+
+	dataset, err := Open(prefix)
+	if err != nil {
+		t.Fatalf("Open without datastore: %v", err)
+	}
+	defer dataset.Close()
+
+	stats := dataset.Stats()
+	if stats.HasDataStore {
+		t.Error("expected HasDataStore false")
+	}
+	if !stats.HasPostingIndex || !stats.HasMetadata {
+		t.Errorf("expected posting index and metadata present: %+v", stats)
+	}
+
+	hits, err := dataset.QueryFull(queryValues, &PostingQueryOptions{MinHits: 3, TopK: 5})
+	if err != nil {
+		t.Fatalf("QueryFull: %v", err)
+	}
+	if len(hits) == 0 || hits[0].FingerprintID != queryID {
+		t.Fatalf("QueryFull: expected self-match for %d, got %+v", queryID, hits)
+	}
+
+	if _, err := dataset.Lookup(queryID); !errors.Is(err, ErrNoDataStore) {
+		t.Errorf("Lookup: want ErrNoDataStore, got %v", err)
+	}
+	if _, _, err := dataset.LookupMetadata(queryID); err != nil {
+		t.Errorf("LookupMetadata: %v", err)
+	}
+}

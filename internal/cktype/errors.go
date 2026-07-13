@@ -17,4 +17,5 @@ var (
 	ErrNoPostingIndex     = errors.New("ckaf: dataset has no sampled posting index (.cki)")
 	ErrNoSearchIndex      = errors.New("ckaf: dataset has no search index (.ckx)")
 	ErrNoIndex            = errors.New("ckaf: dataset has no search index (.ckx) or posting index (.cki)")
+	ErrNoDataStore        = errors.New("ckaf: dataset has no datastore (.ckd)")
 )

@@ -26,12 +26,8 @@ func Open(prefix string) (*Dataset, error) {
 }
 
 func OpenWithOptions(prefix string, opts DatasetOptions) (*Dataset, error) {
-	ds, err := datastore.Open(prefix + ".ckd")
-	if err != nil {
-		return nil, fmt.Errorf("open datastore: %w", err)
-	}
-
 	var (
+		ds *datastore.DataStore
 		si *searchindex.SearchIndex
 		mm *metadata.MetadataMap
 		pi *postingindex.PostingIndex
@@ -46,7 +42,16 @@ func OpenWithOptions(prefix string, opts DatasetOptions) (*Dataset, error) {
 		if si != nil {
 			si.Close()
 		}
-		ds.Close()
+		if ds != nil {
+			ds.Close()
+		}
+	}
+
+	if _, err := os.Stat(prefix + ".ckd"); err == nil {
+		ds, err = datastore.Open(prefix + ".ckd")
+		if err != nil {
+			return nil, fmt.Errorf("open datastore: %w", err)
+		}
 	}
 
 	if _, err := os.Stat(prefix + ".ckx"); err == nil {
@@ -77,24 +82,45 @@ func OpenWithOptions(prefix string, opts DatasetOptions) (*Dataset, error) {
 		closeAll()
 		return nil, fmt.Errorf("%w: %s", ErrNoIndex, prefix)
 	}
+	if ds == nil && pi == nil {
+		closeAll()
+		return nil, fmt.Errorf("%w: %s (posting index required when datastore is absent)", ErrNoDataStore, prefix)
+	}
 
-	dsID := ds.Header.DatasetID
-	if si != nil {
-		if siID := si.Header.DatasetID; siID != dsID {
+	var refID uuid.UUID
+	refName := ""
+	check := func(name string, id uuid.UUID) error {
+		if refName == "" {
+			refID, refName = id, name
+			return nil
+		}
+		if id != refID {
+			return fmt.Errorf("%w: %s %x vs %s %x", ErrDatasetMismatch, refName, refID, name, id)
+		}
+		return nil
+	}
+	if ds != nil {
+		if err := check("datastore", ds.Header.DatasetID); err != nil {
 			closeAll()
-			return nil, fmt.Errorf("%w: datastore %x vs search index %x", ErrDatasetMismatch, dsID, siID)
+			return nil, err
+		}
+	}
+	if si != nil {
+		if err := check("search index", si.Header.DatasetID); err != nil {
+			closeAll()
+			return nil, err
 		}
 	}
 	if mm != nil {
-		if mmID := mm.Header.DatasetID; mmID != dsID {
+		if err := check("metadata", mm.Header.DatasetID); err != nil {
 			closeAll()
-			return nil, fmt.Errorf("%w: datastore %x vs metadata %x", ErrDatasetMismatch, dsID, mmID)
+			return nil, err
 		}
 	}
 	if pi != nil {
-		if piID := pi.Header.DatasetID; piID != dsID {
+		if err := check("posting index", pi.Header.DatasetID); err != nil {
 			closeAll()
-			return nil, fmt.Errorf("%w: datastore %x vs posting index %x", ErrDatasetMismatch, dsID, piID)
+			return nil, err
 		}
 	}
 
@@ -118,8 +144,10 @@ func (d *Dataset) Close() error {
 			firstErr = err
 		}
 	}
-	if err := d.ds.Close(); err != nil && firstErr == nil {
-		firstErr = err
+	if d.ds != nil {
+		if err := d.ds.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
 	}
 	return firstErr
 }
@@ -127,6 +155,9 @@ func (d *Dataset) Close() error {
 func (d *Dataset) Query(fingerprint []uint32, durationMs uint32, opts *QueryOptions) ([]MatchResult, error) {
 	if d.si == nil {
 		return nil, ErrNoSearchIndex
+	}
+	if d.ds == nil {
+		return nil, ErrNoDataStore
 	}
 	return queryDataset(d.ds, d.si, d.mm, fingerprint, durationMs, opts)
 }
@@ -139,6 +170,9 @@ func (d *Dataset) QueryFull(values []uint32, opts *PostingQueryOptions) ([]Posti
 }
 
 func (d *Dataset) Lookup(id uint32) (*Fingerprint, error) {
+	if d.ds == nil {
+		return nil, ErrNoDataStore
+	}
 	rec, err := d.ds.Lookup(id)
 	if err != nil {
 		return nil, err
@@ -163,6 +197,9 @@ func (d *Dataset) LookupMetadata(id uint32) (*TrackMetadata, *uuid.UUID, error) 
 }
 
 func (d *Dataset) NeedsCompaction(thresholdPct float64) bool {
+	if d.ds == nil {
+		return false
+	}
 	mainCount := d.ds.RecordCount()
 	if mainCount == 0 {
 		return d.ds.HasOvfl
@@ -172,10 +209,12 @@ func (d *Dataset) NeedsCompaction(thresholdPct float64) bool {
 }
 
 func (d *Dataset) Stats() DatasetStats {
-	stats := DatasetStats{
-		RecordCount:   d.ds.RecordCount(),
-		HasOverflow:   d.ds.HasOvfl,
-		OverflowCount: d.ds.OverflowCount,
+	var stats DatasetStats
+	if d.ds != nil {
+		stats.HasDataStore = true
+		stats.RecordCount = d.ds.RecordCount()
+		stats.HasOverflow = d.ds.HasOvfl
+		stats.OverflowCount = d.ds.OverflowCount
 	}
 	if d.si != nil {
 		stats.HasSearchIndex = true
