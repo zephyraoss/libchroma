@@ -78,11 +78,17 @@ func TestDataStoreBuilderSpillEquivalence(t *testing.T) {
 
 			memPath := filepath.Join(dir, "mem.ckd")
 			spillPath := filepath.Join(dir, "spill.ckd")
+			concurrentPath := filepath.Join(dir, "concurrent.ckd")
 			build(memPath, BuilderOptions{})
 			build(spillPath, BuilderOptions{SpillDir: spillDir})
+			build(concurrentPath, BuilderOptions{SpillDir: spillDir, Concurrency: 8})
 
-			if !bytes.Equal(readMaskedFile(t, memPath), readMaskedFile(t, spillPath)) {
+			want := readMaskedFile(t, memPath)
+			if !bytes.Equal(want, readMaskedFile(t, spillPath)) {
 				t.Errorf("spill-built .ckd differs from in-memory-built .ckd")
+			}
+			if !bytes.Equal(want, readMaskedFile(t, concurrentPath)) {
+				t.Errorf("concurrent spill-built .ckd differs from in-memory-built .ckd")
 			}
 			requireEmptyDir(t, spillDir)
 		})
@@ -134,13 +140,71 @@ func TestPostingIndexBuilderSpillEquivalence(t *testing.T) {
 
 			memPath := filepath.Join(dir, "mem.cki")
 			spillPath := filepath.Join(dir, "spill.cki")
+			concurrentPath := filepath.Join(dir, "concurrent.cki")
 			build(memPath, BuilderOptions{})
 			build(spillPath, BuilderOptions{SpillDir: spillDir, SpillBufferBytes: 1024})
+			build(concurrentPath, BuilderOptions{SpillDir: spillDir, SpillBufferBytes: 1024, Concurrency: 8})
 
-			if !bytes.Equal(readMaskedFile(t, memPath), readMaskedFile(t, spillPath)) {
+			want := readMaskedFile(t, memPath)
+			if !bytes.Equal(want, readMaskedFile(t, spillPath)) {
 				t.Errorf("spill-built .cki differs from in-memory-built .cki")
 			}
+			if !bytes.Equal(want, readMaskedFile(t, concurrentPath)) {
+				t.Errorf("concurrent spill-built .cki differs from in-memory-built .cki")
+			}
 			requireEmptyDir(t, spillDir)
+		})
+	}
+}
+
+func TestDataStoreBuilderAddPrecompressedEquivalence(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		opts func(dir string) BuilderOptions
+	}{
+		{"memory", func(string) BuilderOptions { return BuilderOptions{} }},
+		{"spill", func(dir string) BuilderOptions { return BuilderOptions{SpillDir: dir} }},
+		{"spill-concurrent", func(dir string) BuilderOptions { return BuilderOptions{SpillDir: dir, Concurrency: 4} }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			datasetID := uuid.New()
+			const numRecords = 200
+
+			build := func(path string, add func(b *DataStoreBuilder, id, dur uint32, vals []uint32) error) {
+				t.Helper()
+				b, err := NewDataStoreBuilderWithOptions(path, CompressPFOR, tc.opts(dir))
+				if err != nil {
+					t.Fatalf("NewDataStoreBuilderWithOptions: %v", err)
+				}
+				b.SetDatasetID(datasetID)
+				for i := 0; i < numRecords; i++ {
+					id, dur, vals := generateTestFingerprint(uint32(i+1), 20+i%30)
+					if err := add(b, id, dur, vals); err != nil {
+						t.Fatalf("add: %v", err)
+					}
+				}
+				if err := b.Finish(); err != nil {
+					t.Fatalf("Finish: %v", err)
+				}
+			}
+
+			plainPath := filepath.Join(dir, "plain.ckd")
+			prePath := filepath.Join(dir, "pre.ckd")
+			build(plainPath, func(b *DataStoreBuilder, id, dur uint32, vals []uint32) error {
+				return b.Add(id, dur, vals)
+			})
+			build(prePath, func(b *DataStoreBuilder, id, dur uint32, vals []uint32) error {
+				compressed, err := CompressFingerprintPFOR(vals)
+				if err != nil {
+					return err
+				}
+				return b.AddPrecompressed(id, dur, compressed, uint16(len(vals)))
+			})
+
+			if !bytes.Equal(readMaskedFile(t, plainPath), readMaskedFile(t, prePath)) {
+				t.Errorf("AddPrecompressed-built .ckd differs from Add-built .ckd")
+			}
 		})
 	}
 }

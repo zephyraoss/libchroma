@@ -2,8 +2,9 @@ package postingindex
 
 import (
 	"bytes"
+	"cmp"
 	"io"
-	"sort"
+	"slices"
 
 	"github.com/zephyraoss/libchroma/v2/internal/wire"
 )
@@ -68,10 +69,18 @@ func postingLess(a, b Posting) bool {
 	return a.Ordinal < b.Ordinal
 }
 
+func comparePostings(a, b Posting) int {
+	if c := cmp.Compare(a.Hash, b.Hash); c != 0 {
+		return c
+	}
+	if c := cmp.Compare(a.FingerprintID, b.FingerprintID); c != 0 {
+		return c
+	}
+	return cmp.Compare(a.Ordinal, b.Ordinal)
+}
+
 func Prepare(postings []Posting) []Posting {
-	sort.Slice(postings, func(i, j int) bool {
-		return postingLess(postings[i], postings[j])
-	})
+	slices.SortFunc(postings, comparePostings)
 	out := postings[:0]
 	for i, p := range postings {
 		if i == 0 || p != postings[i-1] {

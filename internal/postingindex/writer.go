@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -22,6 +23,8 @@ const (
 	spillRunRecordSize = 9
 
 	postingMemBytes = 12
+
+	maxPendingRunFlushes = 2
 )
 
 type Builder struct {
@@ -35,12 +38,24 @@ type Builder struct {
 	runDir   string
 	runLimit int
 	runCount int
+
+	concurrency int
+	logFn       func(format string, args ...any)
+
+	flushSem chan struct{}
+	flushWG  sync.WaitGroup
+	flushMu  sync.Mutex
+	flushErr error
 }
 
 type BuilderOptions struct {
 	SpillDir string
 
 	SpillBufferBytes int64
+
+	Concurrency int
+
+	Logf func(format string, args ...any)
 }
 
 func NewBuilder(path string) (*Builder, error) {
@@ -60,6 +75,8 @@ func NewBuilderWithOptions(path string, opts BuilderOptions) (*Builder, error) {
 			QBits:        DefaultQBits,
 			SkipInterval: DefaultSkipInterval,
 		},
+		concurrency: opts.Concurrency,
+		logFn:       opts.Logf,
 	}
 	if opts.SpillDir != "" {
 		runDir, err := os.MkdirTemp(opts.SpillDir, "cki-runs-*")
@@ -78,8 +95,17 @@ func NewBuilderWithOptions(path string, opts BuilderOptions) (*Builder, error) {
 		if b.runLimit < 1 {
 			b.runLimit = 1
 		}
+		if b.concurrency > 1 {
+			b.flushSem = make(chan struct{}, maxPendingRunFlushes)
+		}
 	}
 	return b, nil
+}
+
+func (b *Builder) logf(format string, args ...any) {
+	if b.logFn != nil {
+		b.logFn(format, args...)
+	}
 }
 
 func (b *Builder) SetDatasetID(id uuid.UUID) {
@@ -159,8 +185,73 @@ func (b *Builder) flushRun() error {
 	if len(b.postings) == 0 {
 		return nil
 	}
-	sorted := Prepare(b.postings)
-	f, err := os.Create(b.runPath(b.runCount))
+	if b.flushSem != nil {
+		if err := b.flushFailure(); err != nil {
+			return err
+		}
+		b.flushSem <- struct{}{}
+		postings := b.postings
+		b.postings = make([]Posting, 0, b.runLimit)
+		b.dispatchRun(postings, func() { <-b.flushSem })
+		return nil
+	}
+	if err := writeRunFile(b.runPath(b.runCount), b.postings); err != nil {
+		return err
+	}
+	b.runCount++
+	b.postings = b.postings[:0]
+	return nil
+}
+
+func (b *Builder) flushFinal() error {
+	if b.flushSem == nil || len(b.postings) == 0 {
+		return b.flushRun()
+	}
+	if err := b.flushFailure(); err != nil {
+		return err
+	}
+	chunk := (len(b.postings) + b.concurrency - 1) / b.concurrency
+	for start := 0; start < len(b.postings); start += chunk {
+		end := start + chunk
+		if end > len(b.postings) {
+			end = len(b.postings)
+		}
+		b.dispatchRun(b.postings[start:end], func() {})
+	}
+	b.postings = nil
+	return nil
+}
+
+func (b *Builder) dispatchRun(postings []Posting, release func()) {
+	path := b.runPath(b.runCount)
+	b.runCount++
+	b.flushWG.Add(1)
+	go func() {
+		defer b.flushWG.Done()
+		defer release()
+		if err := writeRunFile(path, postings); err != nil {
+			b.recordFlushFailure(err)
+		}
+	}()
+}
+
+func (b *Builder) flushFailure() error {
+	b.flushMu.Lock()
+	defer b.flushMu.Unlock()
+	return b.flushErr
+}
+
+func (b *Builder) recordFlushFailure(err error) {
+	b.flushMu.Lock()
+	defer b.flushMu.Unlock()
+	if b.flushErr == nil {
+		b.flushErr = err
+	}
+}
+
+func writeRunFile(path string, postings []Posting) error {
+	sorted := Prepare(postings)
+	f, err := os.Create(path)
 	if err != nil {
 		return fmt.Errorf("creating run file: %w", err)
 	}
@@ -182,8 +273,6 @@ func (b *Builder) flushRun() error {
 	if err := f.Close(); err != nil {
 		return fmt.Errorf("closing run file: %w", err)
 	}
-	b.runCount++
-	b.postings = b.postings[:0]
 	return nil
 }
 
@@ -192,6 +281,7 @@ func (b *Builder) runPath(i int) string {
 }
 
 func (b *Builder) Finish() error {
+	b.flushWG.Wait()
 	if b.runDir != "" {
 		defer os.RemoveAll(b.runDir)
 	}
@@ -233,8 +323,16 @@ func (b *Builder) writeFile() error {
 }
 
 func (b *Builder) writeFileSpill() error {
-	if err := b.flushRun(); err != nil {
+	if err := b.flushFinal(); err != nil {
 		return err
+	}
+	b.flushWG.Wait()
+	if err := b.flushFailure(); err != nil {
+		return err
+	}
+
+	if b.concurrency > 1 {
+		return b.writeFileSharded()
 	}
 
 	blobFile, err := os.CreateTemp(b.spillDir, "cki-blob-*.tmp")
@@ -270,10 +368,10 @@ func (b *Builder) writeFileSpill() error {
 }
 
 func (b *Builder) mergeRuns(enc *bucketEncoder) error {
-	readers := make([]*runReader, 0, b.runCount)
+	files := make([]*os.File, 0, b.runCount)
 	defer func() {
-		for _, r := range readers {
-			r.f.Close()
+		for _, f := range files {
+			f.Close()
 		}
 	}()
 	h := make(runHeap, 0, b.runCount)
@@ -282,8 +380,8 @@ func (b *Builder) mergeRuns(enc *bucketEncoder) error {
 		if err != nil {
 			return fmt.Errorf("opening run file: %w", err)
 		}
-		r := &runReader{f: f, r: bufio.NewReaderSize(f, 1<<20)}
-		readers = append(readers, r)
+		files = append(files, f)
+		r := &runReader{r: bufio.NewReaderSize(f, 1<<20)}
 		ok, err := r.next()
 		if err != nil {
 			return err
@@ -292,28 +390,32 @@ func (b *Builder) mergeRuns(enc *bucketEncoder) error {
 			h = append(h, r)
 		}
 	}
-	heap.Init(&h)
+	return mergeHeap(&h, enc.encodeBucket)
+}
+
+func mergeHeap(h *runHeap, emit func([]Posting) error) error {
+	heap.Init(h)
 
 	var bucket []Posting
 	var last Posting
 	var emitted bool
 	for h.Len() > 0 {
-		r := h[0]
+		r := (*h)[0]
 		p := r.cur
 		ok, err := r.next()
 		if err != nil {
 			return err
 		}
 		if ok {
-			heap.Fix(&h, 0)
+			heap.Fix(h, 0)
 		} else {
-			heap.Pop(&h)
+			heap.Pop(h)
 		}
 		if emitted && p == last {
 			continue
 		}
 		if emitted && p.Hash != last.Hash {
-			if err := enc.encodeBucket(bucket); err != nil {
+			if err := emit(bucket); err != nil {
 				return fmt.Errorf("writing posting buckets: %w", err)
 			}
 			bucket = bucket[:0]
@@ -322,14 +424,13 @@ func (b *Builder) mergeRuns(enc *bucketEncoder) error {
 		last = p
 		emitted = true
 	}
-	if err := enc.encodeBucket(bucket); err != nil {
+	if err := emit(bucket); err != nil {
 		return fmt.Errorf("writing posting buckets: %w", err)
 	}
 	return nil
 }
 
 type runReader struct {
-	f   *os.File
 	r   *bufio.Reader
 	cur Posting
 }

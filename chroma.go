@@ -267,6 +267,10 @@ type BuilderOptions struct {
 	SpillDir string
 
 	SpillBufferBytes int64
+
+	Concurrency int
+
+	Logf func(format string, args ...any)
 }
 
 func NewDataStoreBuilder(path string, compression CompressionMethod) (*DataStoreBuilder, error) {
@@ -275,7 +279,9 @@ func NewDataStoreBuilder(path string, compression CompressionMethod) (*DataStore
 
 func NewDataStoreBuilderWithOptions(path string, compression CompressionMethod, opts BuilderOptions) (*DataStoreBuilder, error) {
 	return datastore.NewBuilderWithOptions(path, compression, datastore.BuilderOptions{
-		SpillDir: opts.SpillDir,
+		SpillDir:    opts.SpillDir,
+		Concurrency: opts.Concurrency,
+		Logf:        opts.Logf,
 	})
 }
 
@@ -295,6 +301,8 @@ func NewPostingIndexBuilderWithOptions(path string, opts BuilderOptions) (*Posti
 	return postingindex.NewBuilderWithOptions(path, postingindex.BuilderOptions{
 		SpillDir:         opts.SpillDir,
 		SpillBufferBytes: opts.SpillBufferBytes,
+		Concurrency:      opts.Concurrency,
+		Logf:             opts.Logf,
 	})
 }
 
