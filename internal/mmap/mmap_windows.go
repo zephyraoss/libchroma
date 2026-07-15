@@ -43,3 +43,6 @@ func Unmap(m *Data) error {
 	m.Bytes = nil
 	return windows.UnmapViewOfFile(addr)
 }
+
+func (m *Data) Advise(off, length int64) {
+}

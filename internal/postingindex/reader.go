@@ -215,9 +215,9 @@ func (idx *PostingIndex) readSkipEntry(r region, i int) (SkipEntry, error) {
 	}, nil
 }
 
-func (idx *PostingIndex) lookupRegion(r region, target uint32) ([]cktype.SampledPosting, error) {
+func (idx *PostingIndex) regionScanBounds(r region, target uint32) (SkipEntry, int64, bool, error) {
 	if r.skipCount == 0 || r.postingLen <= 0 {
-		return nil, nil
+		return SkipEntry{}, 0, false, nil
 	}
 
 	lo, hi := 0, r.skipCount-1
@@ -226,7 +226,7 @@ func (idx *PostingIndex) lookupRegion(r region, target uint32) ([]cktype.Sampled
 		mid := lo + (hi-lo)/2
 		e, err := idx.readSkipEntry(r, mid)
 		if err != nil {
-			return nil, err
+			return SkipEntry{}, 0, false, err
 		}
 		if e.Hash <= target {
 			found = mid
@@ -236,25 +236,59 @@ func (idx *PostingIndex) lookupRegion(r region, target uint32) ([]cktype.Sampled
 		}
 	}
 	if found < 0 {
-		return nil, nil
+		return SkipEntry{}, 0, false, nil
 	}
 
 	entry, err := idx.readSkipEntry(r, found)
 	if err != nil {
-		return nil, err
+		return SkipEntry{}, 0, false, err
 	}
 	scanEnd := r.postingLen
 	if found+1 < r.skipCount {
 		next, err := idx.readSkipEntry(r, found+1)
 		if err != nil {
-			return nil, err
+			return SkipEntry{}, 0, false, err
 		}
 		if int64(next.Offset) < scanEnd {
 			scanEnd = int64(next.Offset)
 		}
 	}
 	if int64(entry.Offset) >= r.postingLen {
-		return nil, fmt.Errorf("%w: skip entry offset %d beyond posting section", cktype.ErrOffsetOutOfBounds, entry.Offset)
+		return SkipEntry{}, 0, false, fmt.Errorf("%w: skip entry offset %d beyond posting section", cktype.ErrOffsetOutOfBounds, entry.Offset)
+	}
+	return entry, scanEnd, true, nil
+}
+
+func (idx *PostingIndex) prefetchHashes(values []uint32) {
+	qmask := QuantizeMask(idx.Tuning.QBits)
+	regions := []region{idx.mainRegion()}
+	if idx.HasOvfl {
+		regions = append(regions, idx.overflowRegion())
+	}
+	seen := make(map[uint32]struct{}, len(values))
+	for _, v := range values {
+		h := v & qmask
+		if _, dup := seen[h]; dup {
+			continue
+		}
+		seen[h] = struct{}{}
+		for _, r := range regions {
+			entry, scanEnd, ok, err := idx.regionScanBounds(r, h)
+			if err != nil || !ok {
+				continue
+			}
+			idx.Mmap.Advise(r.postingStart+int64(entry.Offset), scanEnd-int64(entry.Offset))
+		}
+	}
+}
+
+func (idx *PostingIndex) lookupRegion(r region, target uint32) ([]cktype.SampledPosting, error) {
+	entry, scanEnd, ok, err := idx.regionScanBounds(r, target)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, nil
 	}
 
 	data := make([]byte, scanEnd-int64(entry.Offset))
@@ -354,6 +388,8 @@ func (idx *PostingIndex) QueryFull(values []uint32, opts *cktype.PostingQueryOpt
 
 	stride := int(idx.Tuning.Stride)
 	votes := make(map[uint64]int, 4096)
+
+	idx.prefetchHashes(values)
 
 	for p, v := range values {
 		postings, err := idx.LookupHash(v)

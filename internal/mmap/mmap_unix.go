@@ -32,3 +32,16 @@ func Unmap(m *Data) error {
 	m.Bytes = nil
 	return syscall.Munmap(bytes)
 }
+
+func (m *Data) Advise(off, length int64) {
+	if m.Bytes == nil || length <= 0 || off < 0 || off >= int64(len(m.Bytes)) {
+		return
+	}
+	const pageMask = int64(4095)
+	start := off &^ pageMask
+	end := off + length
+	if end > int64(len(m.Bytes)) {
+		end = int64(len(m.Bytes))
+	}
+	_ = syscall.Madvise(m.Bytes[start:end], syscall.MADV_WILLNEED)
+}
